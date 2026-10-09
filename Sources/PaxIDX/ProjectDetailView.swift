@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 專案詳情：文件列表＋編輯器＋編譯入口
+/// 專案詳情：文件列表＋編輯器＋編譯入口（支持刪除/重命名/複製/貼上）
 struct ProjectDetailView: View {
     let project: Project
     @State private var files: [String] = []
@@ -8,6 +8,10 @@ struct ProjectDetailView: View {
     @State private var showEditor = false
     @State private var showBuild = false
     @State private var message = ""
+    @StateObject private var clipboard = FileClipboard.shared
+    @State private var showRenameAlert = false
+    @State private var renameTarget = ""
+    @State private var newName = ""
 
     var body: some View {
         List {
@@ -19,6 +23,26 @@ struct ProjectDetailView: View {
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .foregroundColor(.secondary)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteFile(file)
+                        } label: {
+                            Label("刪除", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button("重命名") {
+                            renameTarget = file
+                            newName = file
+                            showRenameAlert = true
+                        }
+                        Button("複製") {
+                            copyFile(file, isCut: false)
+                        }
+                        Button("剪切") {
+                            copyFile(file, isCut: true)
                         }
                     }
                 }
@@ -42,7 +66,23 @@ struct ProjectDetailView: View {
             }
         }
         .navigationTitle(project.name)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if clipboard.copiedPath != nil {
+                    Button("貼上") {
+                        pasteFile()
+                    }
+                }
+            }
+        }
         .onAppear(perform: reloadFiles)
+        .alert("重命名", isPresented: $showRenameAlert) {
+            TextField("新名稱", text: $newName)
+            Button("取消", role: .cancel) { }
+            Button("確定") {
+                renameFile(from: renameTarget, to: newName)
+            }
+        }
         .sheet(isPresented: $showEditor) {
             if let file = selectedFile {
                 NavigationView {
@@ -61,11 +101,80 @@ struct ProjectDetailView: View {
     private func reloadFiles() {
         let dir = ProjectFiles.sourcesDirectory(for: project.name)
         files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        message = ""
     }
 
     private func openFile(_ file: String) {
         selectedFile = file
         showEditor = true
+    }
+
+    private func deleteFile(_ file: String) {
+        let url = ProjectFiles.sourcesDirectory(for: project.name)
+            .appendingPathComponent(file)
+        do {
+            try FileManager.default.removeItem(at: url)
+            reloadFiles()
+        } catch {
+            message = "刪除失敗：\(error.localizedDescription)"
+        }
+    }
+
+    private func renameFile(from oldName: String, to newName: String) {
+        guard !newName.isEmpty, newName != oldName else { return }
+        let dir = ProjectFiles.sourcesDirectory(for: project.name)
+        let oldURL = dir.appendingPathComponent(oldName)
+        let newURL = dir.appendingPathComponent(newName)
+        do {
+            if FileManager.default.fileExists(atPath: newURL.path) {
+                message = "重命名失敗：目標已存在"
+                return
+            }
+            try FileManager.default.moveItem(at: oldURL, to: newURL)
+            reloadFiles()
+        } catch {
+            message = "重命名失敗：\(error.localizedDescription)"
+        }
+    }
+
+    private func copyFile(_ file: String, isCut: Bool) {
+        let url = ProjectFiles.sourcesDirectory(for: project.name)
+            .appendingPathComponent(file)
+        clipboard.copiedPath = url.path
+        clipboard.copiedName = file
+        clipboard.isCut = isCut
+        message = isCut ? "已剪切：\(file)" : "已複製：\(file)"
+    }
+
+    private func pasteFile() {
+        guard let srcPath = clipboard.copiedPath,
+              let name = clipboard.copiedName else { return }
+        let dir = ProjectFiles.sourcesDirectory(for: project.name)
+        let fm = FileManager.default
+        var destName = name
+        var destURL = dir.appendingPathComponent(destName)
+        // 避免重名
+        var counter = 1
+        while fm.fileExists(atPath: destURL.path) {
+            let base = (name as NSString).deletingPathExtension
+            let ext = (name as NSString).pathExtension
+            destName = ext.isEmpty ? "\(base)_\(counter)" : "\(base)_\(counter).\(ext)"
+            destURL = dir.appendingPathComponent(destName)
+            counter += 1
+        }
+        do {
+            if clipboard.isCut {
+                try fm.moveItem(atPath: srcPath, toPath: destURL.path)
+                clipboard.copiedPath = nil
+                clipboard.copiedName = nil
+            } else {
+                try fm.copyItem(atPath: srcPath, toPath: destURL.path)
+            }
+            reloadFiles()
+            message = "已貼上：\(destName)"
+        } catch {
+            message = "貼上失敗：\(error.localizedDescription)"
+        }
     }
 }
 

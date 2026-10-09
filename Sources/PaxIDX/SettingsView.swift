@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// 設定頁：SDK 管理 + 關於
 struct SettingsView: View {
@@ -7,6 +8,8 @@ struct SettingsView: View {
     @State private var downloadProgress = 0.0
     @State private var sdkMessage = ""
     @State private var toolchainMessage = ""
+    @State private var showImporter = false
+    @State private var isImporting = false
 
     var body: some View {
         NavigationView {
@@ -32,10 +35,18 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-                    if !sdkInstalled && !isDownloading {
+                    if !sdkInstalled && !isDownloading && !isImporting {
                         Button("下載 SDK（約 36MB）") {
                             downloadSDK()
                         }
+                        Button("從文件導入 SDK（選擇 zip）") {
+                            showImporter = true
+                        }
+                    }
+                    if isImporting {
+                        Text("正在導入…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     if sdkInstalled {
                         Button("刪除 SDK", role: .destructive) {
@@ -88,6 +99,13 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("設定")
+            .fileImporter(
+                isPresented: $showImporter,
+                allowedContentTypes: [.zip],
+                allowsMultipleSelection: false
+            ) { result in
+                importSDK(result: result)
+            }
         }
     }
 
@@ -112,12 +130,55 @@ struct SettingsView: View {
             }
         )
     }
+
+    private func importSDK(result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            isImporting = true
+            sdkMessage = "正在導入…"
+            // 在後台線程處理，避免阻塞 UI
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    // 開始訪問安全作用域資源
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    try SDKManager.shared.importFrom(zip: url)
+                    DispatchQueue.main.async {
+                        isImporting = false
+                        sdkInstalled = true
+                        sdkMessage = "導入成功"
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        isImporting = false
+                        sdkMessage = "導入失敗：\(error.localizedDescription)"
+                    }
+                }
+            }
+        case .failure(let error):
+            sdkMessage = "選擇文件失敗：\(error.localizedDescription)"
+        }
+    }
 }
 
-/// 文件瀏覽器：瀏覽 App Documents 目錄
+/// 文件操作剪貼板（單例，跨視圖共享）
+final class FileClipboard: ObservableObject {
+    static let shared = FileClipboard()
+    @Published var copiedPath: String?
+    @Published var copiedName: String?
+    @Published var isCut = false  // true=剪切，false=複製
+}
+
+/// 文件瀏覽器：瀏覽 App Documents 目錄，支持刪除/重命名/複製/貼上
 struct FileBrowserView: View {
     @State private var currentPath: String
     @State private var items: [(name: String, isDir: Bool)] = []
+    @StateObject private var clipboard = FileClipboard.shared
+    @State private var showRenameAlert = false
+    @State private var renameTarget = ""
+    @State private var newName = ""
+    @State private var message = ""
 
     init(path: String? = nil) {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -135,6 +196,26 @@ struct FileBrowserView: View {
                             Text(item.name)
                         }
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteItem(item.name)
+                        } label: {
+                            Label("刪除", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button("重命名") {
+                            renameTarget = item.name
+                            newName = item.name
+                            showRenameAlert = true
+                        }
+                        Button("複製") {
+                            copyItem(item.name, isCut: false)
+                        }
+                        Button("剪切") {
+                            copyItem(item.name, isCut: true)
+                        }
+                    }
                 } else {
                     HStack {
                         Image(systemName: "doc.fill")
@@ -142,12 +223,53 @@ struct FileBrowserView: View {
                         Text(item.name)
                             .foregroundColor(.secondary)
                     }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deleteItem(item.name)
+                        } label: {
+                            Label("刪除", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button("重命名") {
+                            renameTarget = item.name
+                            newName = item.name
+                            showRenameAlert = true
+                        }
+                        Button("複製") {
+                            copyItem(item.name, isCut: false)
+                        }
+                        Button("剪切") {
+                            copyItem(item.name, isCut: true)
+                        }
+                    }
                 }
+            }
+            if !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle((currentPath as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if clipboard.copiedPath != nil {
+                    Button("貼上") {
+                        pasteItem()
+                    }
+                }
+            }
+        }
         .onAppear(perform: reload)
+        .alert("重命名", isPresented: $showRenameAlert) {
+            TextField("新名稱", text: $newName)
+            Button("取消", role: .cancel) { }
+            Button("確定") {
+                renameItem(from: renameTarget, to: newName)
+            }
+        }
     }
 
     private func reload() {
@@ -161,6 +283,76 @@ struct FileBrowserView: View {
         }.sorted { a, b in
             if a.isDir != b.isDir { return a.isDir && !b.isDir }
             return a.name < b.name
+        }
+        message = ""
+    }
+
+    private func deleteItem(_ name: String) {
+        let fm = FileManager.default
+        let full = (currentPath as NSString).appendingPathComponent(name)
+        // 確認刪除（直接刪，iOS 原生左滑刪除通常不二次確認）
+        do {
+            try fm.removeItem(atPath: full)
+            reload()
+        } catch {
+            message = "刪除失敗：\(error.localizedDescription)"
+        }
+    }
+
+    private func renameItem(from oldName: String, to newName: String) {
+        guard !newName.isEmpty, newName != oldName else { return }
+        let fm = FileManager.default
+        let oldPath = (currentPath as NSString).appendingPathComponent(oldName)
+        let newPath = (currentPath as NSString).appendingPathComponent(newName)
+        do {
+            // 檢查目標是否已存在
+            if fm.fileExists(atPath: newPath) {
+                message = "重命名失敗：目標已存在"
+                return
+            }
+            try fm.moveItem(atPath: oldPath, toPath: newPath)
+            reload()
+        } catch {
+            message = "重命名失敗：\(error.localizedDescription)"
+        }
+    }
+
+    private func copyItem(_ name: String, isCut: Bool) {
+        let full = (currentPath as NSString).appendingPathComponent(name)
+        clipboard.copiedPath = full
+        clipboard.copiedName = name
+        clipboard.isCut = isCut
+        message = isCut ? "已剪切：\(name)" : "已複製：\(name)"
+    }
+
+    private func pasteItem() {
+        guard let srcPath = clipboard.copiedPath,
+              let name = clipboard.copiedName else { return }
+        let fm = FileManager.default
+        var destName = name
+        var destPath = (currentPath as NSString).appendingPathComponent(destName)
+        // 如果目標已存在，自動加後綴
+        var counter = 1
+        while fm.fileExists(atPath: destPath) {
+            let base = (name as NSString).deletingPathExtension
+            let ext = (name as NSString).pathExtension
+            destName = ext.isEmpty ? "\(base)_\(counter)" : "\(base)_\(counter).\(ext)"
+            destPath = (currentPath as NSString).appendingPathComponent(destName)
+            counter += 1
+        }
+        do {
+            if clipboard.isCut {
+                try fm.moveItem(atPath: srcPath, toPath: destPath)
+                // 剪切後清空剪貼板
+                clipboard.copiedPath = nil
+                clipboard.copiedName = nil
+            } else {
+                try fm.copyItem(atPath: srcPath, toPath: destPath)
+            }
+            reload()
+            message = "已貼上：\(destName)"
+        } catch {
+            message = "貼上失敗：\(error.localizedDescription)"
         }
     }
 }

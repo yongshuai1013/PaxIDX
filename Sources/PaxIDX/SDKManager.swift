@@ -147,6 +147,29 @@ final class SDKManager {
     func remove() throws {
         try FileManager.default.removeItem(at: containerURL)
     }
+
+    /// 從用戶選擇的 zip 文件導入 SDK（手動導入，繞開網絡下載）
+    /// - Parameter sourceURL: 用戶選擇的 zip 文件 URL（來自文件選擇器）
+    /// - Throws: 解壓失敗時拋出錯誤
+    func importFrom(zip sourceURL: URL) throws {
+        let fm = FileManager.default
+        // 先清掉舊的
+        if fm.fileExists(atPath: containerURL.path) {
+            try? fm.removeItem(at: containerURL)
+        }
+        // 複製到臨時位置（文件選擇器的 URL 是安全作用域的，需要先複製）
+        let tempZip = fm.temporaryDirectory.appendingPathComponent("sdk-import.zip")
+        try? fm.removeItem(at: tempZip)
+        try fm.copyItem(at: sourceURL, to: tempZip)
+        // 解壓
+        try self.extract(zip: tempZip)
+        try? fm.removeItem(at: tempZip)
+        // 驗證
+        guard self.sdkPath != nil else {
+            throw NSError(domain: "SDKManager", code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "導入後找不到 SDK"])
+        }
+    }
 }
 
 /// 下載進度代理：真實按字節數更新進度
