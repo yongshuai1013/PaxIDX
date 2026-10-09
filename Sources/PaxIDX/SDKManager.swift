@@ -29,7 +29,7 @@ final class SDKManager {
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
         // 回退：iOS 15.6 SDK（C 可用；Swift 模塊後續單獨疊加）
-        let downloadURLString = "https://github.com/yongshuai1013/PaxIDX/releases/download/sdk-ios15/iPhoneOS15.6.sdk.zip"
+        let downloadURLString = "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
         guard let downloadURL = URL(string: downloadURLString) else {
             completion(.failure(NSError(domain: "SDKManager", code: -2,
                 userInfo: [NSLocalizedDescriptionKey: "SDK 下載地址無效"])))
