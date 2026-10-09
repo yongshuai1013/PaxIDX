@@ -1,0 +1,26 @@
+name: 上傳 SDK zip 到 release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  upload:
+    runs-on: macos-15
+    steps:
+      - name: 下載 theos SDK
+        run: |
+          curl -sL -o sdk.tar.xz "https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS15.6.sdk.tar.xz"
+          mkdir extracted
+          tar -xf sdk.tar.xz -C extracted
+          cd extracted
+          zip -qr ../iPhoneOS15.6.sdk.zip iPhoneOS15.6.sdk
+          ls -lh ../iPhoneOS15.6.sdk.zip
+
+      - name: 上傳到 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sdk-ios15
+          files: iPhoneOS15.6.sdk.zip

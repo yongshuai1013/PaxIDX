@@ -1,0 +1,61 @@
+# PaxIDX - XcodeGen 配置
+# 所有註釋使用正體中文
+
+name: PaxIDX
+
+options:
+  bundleIdPrefix: com.yongshuai
+
+# iOS 15 是最低支援版本（XForge 要求 iOS 17，這裡刻意降到 15）
+# 關鍵：不依賴 XKit（XKit 要求 iOS 17）
+deploymentTarget:
+  iOS: "15.0"
+
+settings:
+  base:
+    PAXIDX_BUNDLE_ID: com.yongshuai.paxidx
+    PAXIDX_DISPLAY_NAME: PaxIDX
+    PAXIDX_MARKETING_VERSION: "0.1.0"
+    PAXIDX_BUILD_NUMBER: "1"
+
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    version: 0.9.19
+
+targets:
+  PaxIDX:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    dependencies:
+      - package: ZIPFoundation
+    sources:
+      - path: Sources/PaxIDX
+        excludes:
+          # dylib 實現只在工具鏈 CI 上編（要 clang 標頭），不進 App
+          - ToolchainDylibImpl.mm
+      # 只依賴 ZIPFoundation（用於 IPA 打包），不依賴 XKit
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PAXIDX_BUNDLE_ID)
+        # C 工具鏈橋接（給 Swift 調用 paxidx_* 函數）
+        SWIFT_OBJC_BRIDGING_HEADER: $(SRCROOT)/Sources/PaxIDX/PaxIDX-Bridging-Header.h
+        # 原生工具鏈暫時不靜態鏈接（iPhone 7 啟動載入會被系統殺掉）
+        # 下一步：改成 dylib，點編譯時才動態載入
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: $(PAXIDX_DISPLAY_NAME)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UIRequiredDeviceCapabilities:
+          - arm64
+        # 允許在 Files App 中看到 Documents
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
+

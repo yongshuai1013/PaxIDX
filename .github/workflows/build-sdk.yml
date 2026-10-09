@@ -1,0 +1,86 @@
+name: Build Darwin SDK
+
+# 從 Xcode 提取 iPhoneOS SDK 精簡包，供 PaxIDX App 端上編譯用
+# 產物上傳為 workflow artifact（不建 release）
+
+on:
+  workflow_dispatch:
+    inputs:
+      xcode_version:
+        description: 'Xcode 版本（用於標記）'
+        type: string
+        default: '16.4'
+
+permissions:
+  contents: write
+
+jobs:
+  build-sdk:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: 定位 Xcode
+        id: xcode
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode*.app 2>/dev/null | head -1)
+          echo "path=$XCODE_APP" >> "$GITHUB_OUTPUT"
+          echo "Xcode: $XCODE_APP"
+          ls "$XCODE_APP/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/" 2>&1 | head -5
+
+      - name: 提取精簡 SDK
+        run: |
+          set -euxo pipefail
+          # 用 xcrun 定位 SDK（跟 Xcode 一致）
+          SDK_SRC=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "=== SDK: $SDK_SRC ==="
+          ls -lh "$SDK_SRC/" | head -20
+          echo "=== SDK 大小 ==="
+          du -sh "$SDK_SRC/" 2>&1 | head -5
+          
+          mkdir -p darwin-sdk/iPhoneOS.sdk
+          
+          echo "=== 開始複製（用 tar 管道，保留符號鏈接）==="
+          # 用 tar 而不是 cp，更可靠地處理符號鏈接和特殊文件
+          (cd "$SDK_SRC" && tar cf - .) | (cd darwin-sdk/iPhoneOS.sdk && tar xf -)
+          
+          echo "=== 複製完成，統計 ==="
+          du -sh darwin-sdk/
+          find darwin-sdk -type f | wc -l
+          find darwin-sdk -type l | wc -l
+          ls -lh darwin-sdk/iPhoneOS.sdk/ | head -20
+
+      - name: 打包
+        run: |
+          cd darwin-sdk
+          # -y 保留符號鏈接，-qr 遞歸靜默
+          zip -y -qr ../paxidx-darwin-sdk.zip .
+          cd ..
+          ls -lh paxidx-darwin-sdk.zip
+
+      - name: 單獨打包 Swift 模塊（usr/lib/swift）
+        run: |
+          cd darwin-sdk/iPhoneOS.sdk/usr/lib
+          zip -y -qr ../../../../swift-6-modules.zip swift/
+          cd ../../../..
+          ls -lh swift-6-modules.zip
+
+      - name: 上傳 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: paxidx-darwin-sdk
+          path: |
+            paxidx-darwin-sdk.zip
+            swift-6-modules.zip
+          retention-days: 90
+
+      - name: 發布到 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: darwin-sdk-${{ github.run_number }}
+          name: Darwin SDK ${{ github.run_number }}
+          body: PaxIDX 用的精簡版 iPhoneOS SDK
+          files: |
+            paxidx-darwin-sdk.zip
+            swift-6-modules.zip
+          draft: false
+          prerelease: false

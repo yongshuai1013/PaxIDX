@@ -1,0 +1,73 @@
+# 在 GitHub Actions 上編譯 PaxIDX 並打出未簽名 IPA
+# 所有註釋使用正體中文
+name: Build PaxIDX IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'project.yml'
+      - 'Support/**'
+      - 'project.yml'
+      - '.github/workflows/build-ipa.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: 檢出代碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 XcodeGen
+        run: brew install xcodegen
+
+      - name: 選擇兼容的 Xcode
+        run: |
+          ls /Applications/ | grep Xcode
+          # 嘗試找個舊版 Xcode，找不到就用默認的
+          if [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer
+          elif [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+          else
+            echo "沒有舊版 Xcode，用默認的"
+          fi
+          xcodebuild -version
+
+      - name: 下載原生工具鏈 dylib（Swift 版單 dylib，LLD iOS 已修復）
+        run: |
+          mkdir -p Vendor/NativeToolchain
+          # Swift 版（Swift LLVM fork，LLD iOS 封鎖已移除＋符號隱藏）：
+          # 單一 dylib 搞定 C 編譯＋Swift 編譯＋鏈接
+          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
+          unzip -o /tmp/toolchain-dylib.zip -d Vendor/NativeToolchain
+          ls -la Vendor/NativeToolchain/
+
+      - name: 生成 Xcode 項目
+        run: xcodegen generate
+
+      - name: 編譯並打包（不簽名）
+        run: |
+          xcodebuild archive \
+            -scheme PaxIDX \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/PaxIDX.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+          mkdir -p build/ipa/Payload
+          cp -R build/PaxIDX.xcarchive/Products/Applications/PaxIDX.app build/ipa/Payload/
+          # dylib 塞進 Frameworks，跟 App 一起簽名（iOS 才允許 dlopen）
+          mkdir -p build/ipa/Payload/PaxIDX.app/Frameworks
+          cp Vendor/NativeToolchain/libPaxIDXNativeToolchain.dylib build/ipa/Payload/PaxIDX.app/Frameworks/
+          cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
+
+      - name: 上傳未簽名 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaxIDX-unsigned-ipa
+          path: build/PaxIDX-unsigned.ipa

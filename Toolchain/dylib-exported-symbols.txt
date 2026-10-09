@@ -1,0 +1,4 @@
+_paxidx_dylib_available
+_paxidx_dylib_clang_compile
+_paxidx_dylib_swift_compile
+_paxidx_dylib_ld_link
