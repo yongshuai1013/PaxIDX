@@ -17,14 +17,14 @@ struct ProjectDetailView: View {
         List {
             Section(header: Text("源文件")) {
                 ForEach(files, id: \.self) { file in
-                    Button(action: { openFile(file) }) {
-                        HStack {
-                            Text(file)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.secondary)
-                        }
+                    HStack {
+                        Text(file)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { openFile(file) }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             deleteFile(file)
