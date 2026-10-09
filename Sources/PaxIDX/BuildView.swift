@@ -290,7 +290,6 @@ struct BuildView: View {
                 let ldArgs = ["ld", "-o", exePath] + objects + [
                     "-target", "arm64-apple-ios15.0",
                     "-isysroot", sdk,
-                    "-undefined", "dynamic_lookup",
                 ]
                 let (ldRc, ldDiag) = runNative(ldArgs, paxidx_ld_link)
                 if ldRc != 0 {
@@ -361,8 +360,6 @@ struct BuildView: View {
 /// 編譯日誌頁：整頁顯示，方便截圖
 struct BuildLogView: View {
     let log: String
-    @State private var showShare = false
-    @State private var logURL: URL?
 
     var body: some View {
         ScrollView {
@@ -374,32 +371,7 @@ struct BuildLogView: View {
         }
         .navigationTitle("編譯日誌")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("下載日誌") {
-                    let url = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("paxidx-build-\(Int(Date().timeIntervalSince1970)).txt")
-                    try? log.write(to: url, atomically: true, encoding: .utf8)
-                    logURL = url
-                    showShare = true
-                }
-            }
-        }
-        .sheet(isPresented: $showShare) {
-            if let url = logURL {
-                ShareSheet(activityItems: [url])
-            }
-        }
     }
 }
 // 用 #27 新 dylib
 // 用 #28 新 dylib
-
-/// 系統分享面板
-struct ShareSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
-    }
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
