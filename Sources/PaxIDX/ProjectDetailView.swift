@@ -12,29 +12,18 @@ struct ProjectDetailView: View {
     @State private var showRenameAlert = false
     @State private var renameTarget = ""
     @State private var newName = ""
-    @State private var actionSheetFile: String?
-    @State private var showActionSheet = false
 
     var body: some View {
         List {
             Section(header: Text("源文件")) {
                 ForEach(files, id: \.self) { file in
-                    HStack {
-                        Button(action: { openFile(file) }) {
+                    Button(action: { openFile(file) }) {
+                        HStack {
                             Text(file)
-                                .foregroundColor(.primary)
+                            Spacer()
                         }
-                        .buttonStyle(PlainButtonStyle())
-                        Spacer()
-                        Button(action: {
-                            actionSheetFile = file
-                            showActionSheet = true
-                        }) {
-                            Image(systemName: "ellipsis.circle")
-                                .foregroundColor(.secondary)
-                        }
-                        .buttonStyle(PlainButtonStyle())
                     }
+                    .buttonStyle(PlainButtonStyle())
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             deleteFile(file)
@@ -79,24 +68,6 @@ struct ProjectDetailView: View {
             Button("確定") {
                 renameFile(from: renameTarget, to: newName)
             }
-        }
-        .actionSheet(isPresented: $showActionSheet) {
-            ActionSheet(title: Text(actionSheetFile ?? ""), buttons: [
-                .default(Text("重命名")) {
-                    if let f = actionSheetFile {
-                        renameTarget = f
-                        newName = f
-                        showRenameAlert = true
-                    }
-                },
-                .default(Text("複製")) {
-                    if let f = actionSheetFile { copyFile(f, isCut: false) }
-                },
-                .default(Text("剪切")) {
-                    if let f = actionSheetFile { copyFile(f, isCut: true) }
-                },
-                .cancel(Text("取消"))
-            ])
         }
         .sheet(isPresented: $showEditor) {
             if let file = selectedFile {
