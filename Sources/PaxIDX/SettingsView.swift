@@ -354,6 +354,19 @@ struct FileBrowserView: View {
                                 .foregroundColor(.accentColor)
                             Text(item.name)
                         }
+                        .contextMenu {
+                            Button("重命名") {
+                                renameTarget = item.name
+                                newName = item.name
+                                showRenameAlert = true
+                            }
+                            Button("複製") {
+                                copyItem(item.name, isCut: false)
+                            }
+                            Button("剪切") {
+                                copyItem(item.name, isCut: true)
+                            }
+                        }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
@@ -382,6 +395,19 @@ struct FileBrowserView: View {
                             deleteItem(item.name)
                         } label: {
                             Label("刪除", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
+                        Button("重命名") {
+                            renameTarget = item.name
+                            newName = item.name
+                            showRenameAlert = true
+                        }
+                        Button("複製") {
+                            copyItem(item.name, isCut: false)
+                        }
+                        Button("剪切") {
+                            copyItem(item.name, isCut: true)
                         }
                     }
                 }

@@ -22,6 +22,19 @@ struct ProjectDetailView: View {
                             Text(file)
                             Spacer()
                         }
+                        .contextMenu {
+                            Button("重命名") {
+                                renameTarget = file
+                                newName = file
+                                showRenameAlert = true
+                            }
+                            Button("複製") {
+                                copyFile(file, isCut: false)
+                            }
+                            Button("剪切") {
+                                copyFile(file, isCut: true)
+                            }
+                        }
                     }
                     .buttonStyle(PlainButtonStyle())
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
