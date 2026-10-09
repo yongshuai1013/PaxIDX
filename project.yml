@@ -20,7 +20,7 @@ settings:
 
 packages:
   Zip:
-    url: https://github.com/marmelab/Zip
+    url: https://github.com/marmelroy/Zip
     version: 2.1.6
 
 targets:
