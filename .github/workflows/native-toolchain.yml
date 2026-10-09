@@ -945,6 +945,15 @@ jobs:
               tail -30 /tmp/dylib-impl-errors.txt
               exit 1
             }
+          # 當 with_swift=false 時，過濾掉 Swift 符號（ToolchainDylibImpl.mm 的 Swift
+          # 入口有 #ifdef 保護，C 版不會編譯，但導出列表無條件列出會導致鏈接報
+          # Undefined symbols）
+          EXPORTED_SYMBOLS="$GITHUB_WORKSPACE/Toolchain/dylib-exported-symbols.txt"
+          if [ "${{ inputs.with_swift }}" != "true" ]; then
+            grep -v "_paxidx_dylib_swift_compile" "$EXPORTED_SYMBOLS" > /tmp/exported-symbols-c.txt
+            EXPORTED_SYMBOLS="/tmp/exported-symbols-c.txt"
+            echo "已過濾 Swift 符號（C 版）"
+          fi
           xcrun --sdk iphoneos clang++ \
             -dynamiclib \
             -arch arm64 \
@@ -952,7 +961,7 @@ jobs:
             -isysroot "$SDK" \
             /tmp/ToolchainDylibImpl.o \
             -Wl,-all_load,dist/lib/libPaxIDXNativeToolchain.a \
-            -Wl,-exported_symbols_list,"$GITHUB_WORKSPACE/Toolchain/dylib-exported-symbols.txt" \
+            -Wl,-exported_symbols_list,"$EXPORTED_SYMBOLS" \
             -lc++ -lz -liconv -lsqlite3 \
             -framework Foundation \
             -install_name @rpath/libPaxIDXNativeToolchain.dylib \
