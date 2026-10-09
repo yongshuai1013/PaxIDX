@@ -289,6 +289,7 @@ struct BuildView: View {
                 let exePath = buildDir.appendingPathComponent(project.name).path
                 let ldArgs = ["ld", "-o", exePath] + objects + [
                     "-target", "arm64-apple-ios15.0",
+                    "-isysroot", sdk,
                     "-undefined", "dynamic_lookup",
                 ]
                 let (ldRc, ldDiag) = runNative(ldArgs, paxidx_ld_link)

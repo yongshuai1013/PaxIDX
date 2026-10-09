@@ -262,7 +262,8 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
     owned.emplace_back(ver);
     owned.emplace_back("-syslibroot");
     owned.emplace_back(sdk);
-    owned.emplace_back("-lSystem");
+    // 不加 -lSystem：SDK 的 .tbd LLD 解析不了；
+    // 已有 -undefined dynamic_lookup，未定義符號運行時由 iOS 的 libSystem 提供
     // SDK 的 .tbd 可能不全（如 ___darwin_fd_set），允許未定義符號，運行時由 iOS 的 libSystem 提供
     owned.emplace_back("-undefined");
     owned.emplace_back("dynamic_lookup");
