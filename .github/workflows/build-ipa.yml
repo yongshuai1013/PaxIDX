@@ -39,12 +39,12 @@ jobs:
           fi
           xcodebuild -version
 
-      - name: 下載原生工具鏈 dylib（Swift 版單 dylib，LLD iOS 已修復）
+      - name: 下載原生工具鏈 dylib（C 版，LLD iOS 已修復）
         run: |
           mkdir -p Vendor/NativeToolchain
-          # Swift 版（Swift LLVM fork，LLD iOS 封鎖已移除＋符號隱藏）：
-          # 單一 dylib 搞定 C 編譯＋Swift 編譯＋鏈接
-          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
+          # C 版（Swift LLVM fork，LLD iOS 封鎖已移除）：
+          # 專注 C 編譯，Swift 已暫停
+          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-461274b81d86-noswift-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
           unzip -o /tmp/toolchain-dylib.zip -d Vendor/NativeToolchain
           ls -la Vendor/NativeToolchain/
 
