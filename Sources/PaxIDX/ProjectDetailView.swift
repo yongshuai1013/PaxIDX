@@ -21,8 +21,19 @@ struct ProjectDetailView: View {
                         HStack {
                             Text(file)
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.secondary)
+                        }
+                        .contextMenu {
+                            Button("重命名") {
+                                renameTarget = file
+                                newName = file
+                                showRenameAlert = true
+                            }
+                            Button("複製") {
+                                copyFile(file, isCut: false)
+                            }
+                            Button("剪切") {
+                                copyFile(file, isCut: true)
+                            }
                         }
                     }
                     .buttonStyle(PlainButtonStyle())
@@ -31,19 +42,6 @@ struct ProjectDetailView: View {
                             deleteFile(file)
                         } label: {
                             Label("刪除", systemImage: "trash")
-                        }
-                    }
-                    .contextMenu {
-                        Button("重命名") {
-                            renameTarget = file
-                            newName = file
-                            showRenameAlert = true
-                        }
-                        Button("複製") {
-                            copyFile(file, isCut: false)
-                        }
-                        Button("剪切") {
-                            copyFile(file, isCut: true)
                         }
                     }
                 }

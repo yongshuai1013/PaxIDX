@@ -387,12 +387,6 @@ struct FileBrowserView: View {
                                 .foregroundColor(isEditableFile(item.name) ? .accentColor : .secondary)
                             Text(item.name)
                                 .foregroundColor(isEditableFile(item.name) ? .primary : .secondary)
-                            if isEditableFile(item.name) {
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
                         }
                     }
                     .buttonStyle(PlainButtonStyle())
