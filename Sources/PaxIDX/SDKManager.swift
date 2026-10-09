@@ -117,6 +117,15 @@ final class SDKManager {
             let destURL = containerURL.appendingPathComponent(entry.path)
             if entry.type == .directory {
                 try fm.createDirectory(at: destURL, withIntermediateDirectories: true)
+            } else if entry.type == .symlink {
+                // 符號鏈接：先確保父目錄存在，然後用 ZIPFoundation 解壓（會自動創建鏈接）
+                try fm.createDirectory(at: destURL.deletingLastPathComponent(),
+                                       withIntermediateDirectories: true)
+                // 如果目標已存在，先刪除
+                if fm.fileExists(atPath: destURL.path) {
+                    try? fm.removeItem(at: destURL)
+                }
+                _ = try archive.extract(entry, to: destURL)
             } else {
                 try fm.createDirectory(at: destURL.deletingLastPathComponent(),
                                        withIntermediateDirectories: true)
