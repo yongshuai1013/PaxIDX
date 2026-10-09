@@ -316,6 +316,19 @@ struct FileBrowserView: View {
                                 .foregroundColor(.accentColor)
                             Text(item.name)
                         }
+                        .contextMenu {
+                            Button("重命名") {
+                                renameTarget = item.name
+                                newName = item.name
+                                showRenameAlert = true
+                            }
+                            Button("複製") {
+                                copyItem(item.name, isCut: false)
+                            }
+                            Button("剪切") {
+                                copyItem(item.name, isCut: true)
+                            }
+                        }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
@@ -324,39 +337,27 @@ struct FileBrowserView: View {
                             Label("刪除", systemImage: "trash")
                         }
                     }
-                    .contextMenu {
-                        Button("重命名") {
-                            renameTarget = item.name
-                            newName = item.name
-                            showRenameAlert = true
-                        }
-                        Button("複製") {
-                            copyItem(item.name, isCut: false)
-                        }
-                        Button("剪切") {
-                            copyItem(item.name, isCut: true)
-                        }
-                    }
                 } else {
-                    HStack {
-                        Image(systemName: isEditableFile(item.name) ? "doc.text.fill" : "doc.fill")
-                            .foregroundColor(isEditableFile(item.name) ? .accentColor : .secondary)
-                        Text(item.name)
-                            .foregroundColor(isEditableFile(item.name) ? .primary : .secondary)
-                        if isEditableFile(item.name) {
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+                    Button(action: {
                         if isEditableFile(item.name) {
                             editingFilePath = (currentPath as NSString).appendingPathComponent(item.name)
                             showFileEditor = true
                         }
+                    }) {
+                        HStack {
+                            Image(systemName: isEditableFile(item.name) ? "doc.text.fill" : "doc.fill")
+                                .foregroundColor(isEditableFile(item.name) ? .accentColor : .secondary)
+                            Text(item.name)
+                                .foregroundColor(isEditableFile(item.name) ? .primary : .secondary)
+                            if isEditableFile(item.name) {
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.secondary)
+                                    .font(.caption)
+                            }
+                        }
                     }
+                    .buttonStyle(PlainButtonStyle())
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             deleteItem(item.name)
