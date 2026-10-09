@@ -101,7 +101,7 @@ struct SettingsView: View {
             .navigationTitle("設定")
             .fileImporter(
                 isPresented: $showImporter,
-                allowedContentTypes: [.zip],
+                allowedContentTypes: [.data],
                 allowsMultipleSelection: false
             ) { result in
                 importSDK(result: result)
@@ -135,6 +135,12 @@ struct SettingsView: View {
         switch result {
         case .success(let urls):
             guard let url = urls.first else { return }
+            // 檢查是否為 zip 文件
+            let ext = url.pathExtension.lowercased()
+            guard ext == "zip" else {
+                sdkMessage = "請選擇 .zip 文件"
+                return
+            }
             isImporting = true
             sdkMessage = "正在導入…"
             // 在後台線程處理，避免阻塞 UI
