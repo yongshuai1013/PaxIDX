@@ -45,7 +45,13 @@ struct SettingsView: View {
                         Button("從 Documents 掃描導入 SDK") {
                             importFromDocuments()
                         }
-                        Text("先把 paxidx-darwin-sdk.zip 放到文件瀏覽器的根目錄，再點掃描導入")
+                        Button("從已解壓文件夾導入 SDK") {
+                            importFromExtractedFolder()
+                        }
+                        Text("方案一：把 paxidx-darwin-sdk.zip 放到文件瀏覽器根目錄，再點掃描導入")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text("方案二：先用系統文件 App 解壓 zip，把解壓出的 iPhoneOS.sdk 文件夾放到文件瀏覽器根目錄，再點此導入")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -205,6 +211,38 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try SDKManager.shared.importFrom(zip: URL(fileURLWithPath: path))
+                DispatchQueue.main.async {
+                    isImporting = false
+                    sdkInstalled = true
+                    sdkMessage = "導入成功"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isImporting = false
+                    sdkMessage = "導入失敗：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// 從已解壓的文件夾導入 SDK（繞開 ZIPFoundation）
+    /// 用戶先用系統文件 App 解壓 zip，把 iPhoneOS.sdk 文件夾放到 Documents 根目錄
+    private func importFromExtractedFolder() {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            sdkMessage = "找不到 Documents 目錄"
+            return
+        }
+        let source = docs.appendingPathComponent("iPhoneOS.sdk", isDirectory: true)
+        guard fm.fileExists(atPath: source.path) else {
+            sdkMessage = "Documents 根目錄沒找到 iPhoneOS.sdk 文件夾，請先用系統文件 App 解壓 zip 並把文件夾放進來"
+            return
+        }
+        isImporting = true
+        sdkMessage = "正在導入…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try SDKManager.shared.importFromFolder(source)
                 DispatchQueue.main.async {
                     isImporting = false
                     sdkInstalled = true

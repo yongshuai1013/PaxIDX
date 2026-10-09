@@ -179,6 +179,27 @@ final class SDKManager {
                 userInfo: [NSLocalizedDescriptionKey: "導入後找不到 SDK"])
         }
     }
+
+    /// 從已解壓的文件夾導入 SDK（繞開 ZIPFoundation，直接移動文件夾）
+    /// - Parameter source: 已解壓的 iPhoneOS.sdk 文件夾 URL
+    /// - Throws: 移動失敗時拋出錯誤
+    func importFromFolder(_ source: URL) throws {
+        let fm = FileManager.default
+        // 先清掉舊的 SDK 容器
+        if fm.fileExists(atPath: containerURL.path) {
+            try fm.removeItem(at: containerURL)
+        }
+        // 創建容器目錄
+        try fm.createDirectory(at: containerURL, withIntermediateDirectories: true)
+        // 移動文件夾到目標位置
+        let target = containerURL.appendingPathComponent("iPhoneOS.sdk", isDirectory: true)
+        try fm.moveItem(at: source, to: target)
+        // 驗證
+        guard self.sdkPath != nil else {
+            throw NSError(domain: "SDKManager", code: -8,
+                userInfo: [NSLocalizedDescriptionKey: "導入後找不到 SDK"])
+        }
+    }
 }
 
 /// 下載進度代理：真實按字節數更新進度
