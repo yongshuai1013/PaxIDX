@@ -42,6 +42,12 @@ struct SettingsView: View {
                         Button("從文件導入 SDK（選擇 zip）") {
                             showImporter = true
                         }
+                        Button("從 Documents 掃描導入 SDK") {
+                            importFromDocuments()
+                        }
+                        Text("先把 paxidx-darwin-sdk.zip 放到文件瀏覽器的根目錄，再點掃描導入")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                     if isImporting {
                         Text("正在導入…")
@@ -164,6 +170,52 @@ struct SettingsView: View {
             }
         case .failure(let error):
             sdkMessage = "選擇文件失敗：\(error.localizedDescription)"
+        }
+    }
+
+    /// 從 Documents 目錄掃描導入 SDK（繞開文件選擇器）
+    /// 用戶先把 paxidx-darwin-sdk.zip 放到文件瀏覽器根目錄，再點此按鈕
+    private func importFromDocuments() {
+        let fm = FileManager.default
+        guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            sdkMessage = "找不到 Documents 目錄"
+            return
+        }
+        // 查找 zip 文件（優先找 paxidx-darwin-sdk.zip）
+        let contents = (try? fm.contentsOfDirectory(atPath: docs.path)) ?? []
+        var zipPath: String?
+        // 先找精確的
+        for name in contents where name == "paxidx-darwin-sdk.zip" {
+            zipPath = docs.appendingPathComponent(name).path
+            break
+        }
+        // 沒找到就找任意 zip
+        if zipPath == nil {
+            for name in contents where name.lowercased().hasSuffix(".zip") {
+                zipPath = docs.appendingPathComponent(name).path
+                break
+            }
+        }
+        guard let path = zipPath else {
+            sdkMessage = "Documents 根目錄沒找到 zip 文件，請先把 paxidx-darwin-sdk.zip 放進去（用文件瀏覽器的貼上功能）"
+            return
+        }
+        isImporting = true
+        sdkMessage = "正在導入…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try SDKManager.shared.importFrom(zip: URL(fileURLWithPath: path))
+                DispatchQueue.main.async {
+                    isImporting = false
+                    sdkInstalled = true
+                    sdkMessage = "導入成功"
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isImporting = false
+                    sdkMessage = "導入失敗：\(error.localizedDescription)"
+                }
+            }
         }
     }
 }
