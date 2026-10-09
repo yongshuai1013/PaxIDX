@@ -1,5 +1,5 @@
 import Foundation
-import ZIPFoundation
+import SSZipArchive
 
 /// Darwin SDK 管理：下載、解壓、定位
 /// SDK 從 PaxIDX 的 darwin-sdk release 下載（zip 格式，約 35MB，iOS 18.5 SDK），解壓到 App 容器
@@ -108,37 +108,13 @@ final class SDKManager {
             try? fm.removeItem(at: target)
         }
 
-        // 用 ZIPFoundation 解壓（已在項目中，iOS 可用）
-        guard let archive = Archive(url: zip, accessMode: .read) else {
+        // 用 SSZipArchive 解壓（支持符號鏈接）
+        let success = SSZipArchive.unzipFile(atPath: zip.path, toDestination: containerURL.path)
+        guard success else {
             throw NSError(domain: "SDKManager", code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "無法打開 zip"])
-        }
-        for entry in archive {
-            let destURL = containerURL.appendingPathComponent(entry.path)
-            if entry.type == .directory {
-                try fm.createDirectory(at: destURL, withIntermediateDirectories: true)
-            } else if entry.type == .symlink {
-                // 符號鏈接：先確保父目錄存在，然後用 ZIPFoundation 解壓（會自動創建鏈接）
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(),
-                                       withIntermediateDirectories: true)
-                // 如果目標已存在，先刪除
-                if fm.fileExists(atPath: destURL.path) {
-                    try? fm.removeItem(at: destURL)
-                }
-                _ = try archive.extract(entry, to: destURL)
-            } else {
-                try fm.createDirectory(at: destURL.deletingLastPathComponent(),
-                                       withIntermediateDirectories: true)
-                _ = try archive.extract(entry, to: destURL)
-            }
+                userInfo: [NSLocalizedDescriptionKey: "解壓失敗"])
         }
 
-        // 解壓出來是 iPhoneOS15.6.sdk，重命名為 iPhoneOS.sdk
-        let extracted = containerURL.appendingPathComponent("iPhoneOS15.6.sdk", isDirectory: true)
-        if fm.fileExists(atPath: extracted.path) {
-            try? fm.removeItem(at: target)
-            try fm.moveItem(at: extracted, to: target)
-        }
         if !fm.fileExists(atPath: target.path) {
             throw NSError(domain: "SDKManager", code: -6,
                 userInfo: [NSLocalizedDescriptionKey: "解壓後找不到 iPhoneOS.sdk"])

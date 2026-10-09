@@ -1,5 +1,5 @@
 import Foundation
-import ZIPFoundation
+import SSZipArchive
 
 /// 工具鏈 dylib 管理：下載、解壓、定位
 /// dylib 從 PaxIDX 的 toolchain release 下載（zip 格式，約 60MB），解壓到 App 容器
@@ -163,15 +163,10 @@ final class ToolchainManager {
         let fm = FileManager.default
         try fm.createDirectory(at: target, withIntermediateDirectories: true)
 
-        guard let archive = Archive(url: zip, accessMode: .read) else {
+        let success = SSZipArchive.unzipFile(atPath: zip.path, toDestination: target.path)
+        guard success else {
             throw NSError(domain: "ToolchainManager", code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "無法打開 zip"])
-        }
-        for entry in archive {
-            let dest = target.appendingPathComponent(entry.path)
-            try fm.createDirectory(at: dest.deletingLastPathComponent(),
-                                   withIntermediateDirectories: true)
-            _ = try archive.extract(entry, to: dest)
+                userInfo: [NSLocalizedDescriptionKey: "解壓失敗"])
         }
     }
 }

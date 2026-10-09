@@ -1,5 +1,5 @@
 import Foundation
-import ZIPFoundation
+import SSZipArchive
 
 /// IPA 打包：把 .app 塞進 Payload/ 再 zip 成 .ipa
 enum IPABuilder {
@@ -34,21 +34,10 @@ enum IPABuilder {
             try fm.removeItem(at: outputURL)
         }
 
-        // zip 起來
-        guard let archive = Archive(url: outputURL, accessMode: .create) else {
-            throw BuildError.zipFailed
-        }
-        // 遞迴把 staging 下所有東西加進去（entry 路徑相對於 staging）
-        let enumerator = fm.enumerator(at: staging, includingPropertiesForKeys: nil)!
-        for case let fileURL as URL in enumerator {
-            let rel = fileURL.path.replacingOccurrences(of: staging.path + "/", with: "")
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: fileURL.path, isDirectory: &isDir)
-            let entryPath = isDir.boolValue ? rel + "/" : rel
-            try archive.addEntry(with: entryPath, relativeTo: staging, compressionMethod: .deflate)
-        }
-
+        // 用 SSZipArchive 打包
+        let success = SSZipArchive.createZipFile(atPath: outputURL.path, withContentsOfDirectory: staging.path)
         try fm.removeItem(at: staging)
+        guard success else { throw BuildError.zipFailed }
         log("已輸出：\(outputURL.lastPathComponent)")
     }
 }
