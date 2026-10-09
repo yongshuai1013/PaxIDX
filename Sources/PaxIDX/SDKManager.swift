@@ -1,5 +1,5 @@
 import Foundation
-import SSZipArchive
+import Zip
 
 /// Darwin SDK 管理：下載、解壓、定位
 /// SDK 從 PaxIDX 的 darwin-sdk release 下載（zip 格式，約 35MB，iOS 18.5 SDK），解壓到 App 容器
@@ -108,11 +108,12 @@ final class SDKManager {
             try? fm.removeItem(at: target)
         }
 
-        // 用 SSZipArchive 解壓（支持符號鏈接）
-        let success = SSZipArchive.unzipFile(atPath: zip.path, toDestination: containerURL.path)
-        guard success else {
+        // 用 Zip 解壓（支持符號鏈接）
+        do {
+            try Zip.unzipFile(zip, destination: containerURL, overwrite: true, password: nil)
+        } catch {
             throw NSError(domain: "SDKManager", code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "解壓失敗"])
+                userInfo: [NSLocalizedDescriptionKey: "解壓失敗：\(error.localizedDescription)"])
         }
 
         if !fm.fileExists(atPath: target.path) {

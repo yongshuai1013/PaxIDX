@@ -19,9 +19,9 @@ settings:
     PAXIDX_BUILD_NUMBER: "1"
 
 packages:
-  SSZipArchive:
-    url: https://github.com/ZipArchive/ZipArchive
-    version: 2.4.3
+  Zip:
+    url: https://github.com/marmelab/Zip
+    version: 2.1.6
 
 targets:
   PaxIDX:
@@ -29,13 +29,13 @@ targets:
     platform: iOS
     deploymentTarget: "15.0"
     dependencies:
-      - package: SSZipArchive
+      - package: Zip
     sources:
       - path: Sources/PaxIDX
         excludes:
           # dylib 實現只在工具鏈 CI 上編（要 clang 標頭），不進 App
           - ToolchainDylibImpl.mm
-      # 只依賴 SSZipArchive（用於 IPA 打包和 SDK 解壓），不依賴 XKit
+      # 只依賴 Zip（用於 IPA 打包和 SDK 解壓），不依賴 XKit
 
     settings:
       base:
