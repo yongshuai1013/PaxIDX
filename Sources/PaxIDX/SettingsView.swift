@@ -176,7 +176,68 @@ final class FileClipboard: ObservableObject {
     @Published var isCut = false  // true=剪切，false=複製
 }
 
-/// 文件瀏覽器：瀏覽 App Documents 目錄，支持刪除/重命名/複製/貼上
+/// 可編輯的文本文件擴展名（常見的可讀寫格式）
+private let editableExtensions: Set<String> = [
+    "c", "h", "cpp", "hpp", "cc", "m", "mm", "swift",
+    "txt", "md", "json", "xml", "plist", "yaml", "yml",
+    "sh", "py", "js", "ts", "html", "css", "log", "ini", "cfg", "conf"
+]
+
+/// 判斷文件是否可編輯（按擴展名）
+private func isEditableFile(_ name: String) -> Bool {
+    let ext = (name as NSString).pathExtension.lowercased()
+    return editableExtensions.contains(ext)
+}
+
+/// 通用文本文件編輯器（用於文件瀏覽器）
+struct GenericFileEditorView: View {
+    let filePath: String
+    @Environment(\.presentationMode) var presentationMode
+    @State private var content = ""
+    @State private var message = ""
+
+    var body: some View {
+        VStack {
+            TextEditor(text: $content)
+                .font(.system(.body, design: .monospaced))
+                .padding(4)
+            if !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .navigationTitle((filePath as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarItems(
+            trailing: Button("保存") { save() }
+        )
+        .onAppear(perform: load)
+    }
+
+    private func load() {
+        content = (try? String(contentsOfFile: filePath, encoding: .utf8)) ?? ""
+        if content.isEmpty {
+            // 嘗試其他編碼
+            content = (try? String(contentsOf: URL(fileURLWithPath: filePath))) ?? ""
+        }
+    }
+
+    private func save() {
+        do {
+            try content.write(toFile: filePath, atomically: true, encoding: .utf8)
+            message = "已保存"
+            // 延遲關閉，讓用戶看到保存成功
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                presentationMode.wrappedValue.dismiss()
+            }
+        } catch {
+            message = "保存失敗：\(error.localizedDescription)"
+        }
+    }
+}
+
+/// 文件瀏覽器：瀏覽 App Documents 目錄，支持刪除/重命名/複製/貼上，可編輯文本文件
 struct FileBrowserView: View {
     @State private var currentPath: String
     @State private var items: [(name: String, isDir: Bool)] = []
@@ -185,6 +246,8 @@ struct FileBrowserView: View {
     @State private var renameTarget = ""
     @State private var newName = ""
     @State private var message = ""
+    @State private var editingFilePath: String = ""
+    @State private var showFileEditor = false
 
     init(path: String? = nil) {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -224,10 +287,23 @@ struct FileBrowserView: View {
                     }
                 } else {
                     HStack {
-                        Image(systemName: "doc.fill")
-                            .foregroundColor(.secondary)
+                        Image(systemName: isEditableFile(item.name) ? "doc.text.fill" : "doc.fill")
+                            .foregroundColor(isEditableFile(item.name) ? .accentColor : .secondary)
                         Text(item.name)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(isEditableFile(item.name) ? .primary : .secondary)
+                        if isEditableFile(item.name) {
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if isEditableFile(item.name) {
+                            editingFilePath = (currentPath as NSString).appendingPathComponent(item.name)
+                            showFileEditor = true
+                        }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
@@ -274,6 +350,11 @@ struct FileBrowserView: View {
             Button("取消", role: .cancel) { }
             Button("確定") {
                 renameItem(from: renameTarget, to: newName)
+            }
+        }
+        .sheet(isPresented: $showFileEditor) {
+            NavigationView {
+                GenericFileEditorView(filePath: editingFilePath)
             }
         }
     }
