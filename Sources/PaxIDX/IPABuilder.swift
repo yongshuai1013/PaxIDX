@@ -34,9 +34,10 @@ enum IPABuilder {
             try fm.removeItem(at: outputURL)
         }
 
-        // 用 Zip 打包
+        // 用 Zip 打包：只打包 Payload 目錄，讓 zip 根目錄就是 Payload/
+        // （之前傳 [staging] 會把 staging-uuid/ 也打進去，TrollStore 找不到 app bundle）
         do {
-            try Zip.zipFiles(paths: [staging], zipFilePath: outputURL, password: nil, progress: nil)
+            try Zip.zipFiles(paths: [payload], zipFilePath: outputURL, password: nil, progress: nil)
         } catch {
             try? fm.removeItem(at: staging)
             throw BuildError.zipFailed
