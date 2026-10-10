@@ -1024,7 +1024,7 @@ jobs:
       # bundles apart (`swift-…` vs `noswift`), so they never race for the same
       # "newest" slot.
       - name: Publish the toolchain bundle
-        if: ${{ !inputs.configure_only && github.event_name == 'workflow_dispatch' && inputs.publish }}
+        if: ${{ !inputs.configure_only && github.event_name == 'workflow_dispatch' && inputs.publish && steps.stage.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
