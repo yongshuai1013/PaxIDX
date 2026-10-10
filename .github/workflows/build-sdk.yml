@@ -49,11 +49,28 @@ jobs:
           find darwin-sdk -type l | wc -l
           ls -lh darwin-sdk/iPhoneOS.sdk/ | head -20
 
+      - name: 解析符號鏈接（避免 iOS 解壓後 LLD 讀壞 .tbd）
+        run: |
+          # SDK 內有 ~80 個符號鏈接（如 libSystem.tbd -> libSystem.B.tbd）
+          # iOS 端 Zip 庫解壓時鏈接處理不可靠，導致 LLD 報 "unhandled file type"
+          # 這裡全部解析成實文件，內容不變，不影響編譯
+          cd darwin-sdk/iPhoneOS.sdk
+          find . -type l -print0 | while IFS= read -r -d '' link; do
+            target=$(readlink "$link")
+            dir=$(dirname "$link")
+            if [ -e "$dir/$target" ]; then
+              rm "$link"
+              cp -a "$dir/$target" "$link"
+            fi
+          done
+          echo "剩餘鏈接: $(find . -type l | wc -l)"
+          cd ../..
+
       - name: 打包
         run: |
           cd darwin-sdk
-          # -y 保留符號鏈接，-qr 遞歸靜默
-          zip -y -qr ../paxidx-darwin-sdk.zip .
+          # 鏈接已解析，不再需要 -y；-qr 遞歸靜默
+          zip -qr ../paxidx-darwin-sdk.zip .
           cd ..
           ls -lh paxidx-darwin-sdk.zip
 
