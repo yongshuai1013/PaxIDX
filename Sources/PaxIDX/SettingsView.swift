@@ -1,6 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// 測試 LocalizedError 是否導致 iOS 15 閃退
+enum TestLocalizedError: LocalizedError {
+    case testFailure
+    var errorDescription: String? { "Test error" }
+}
+
+
 /// 設定頁：SDK 管理 + 關於
 struct SettingsView: View {
     @State private var sdkInstalled = SDKManager.shared.isInstalled
