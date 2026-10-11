@@ -7,6 +7,13 @@ enum TestLocalizedError: LocalizedError {
     var errorDescription: String? { "Test error" }
 }
 
+// 強制使用，防優化掉
+func _testThrow() throws {
+    throw TestLocalizedError.testFailure
+}
+let _testError: Error = TestLocalizedError.testFailure
+
+
 
 /// 設定頁：SDK 管理 + 關於
 struct SettingsView: View {
