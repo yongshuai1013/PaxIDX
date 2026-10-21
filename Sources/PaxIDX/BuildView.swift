@@ -268,6 +268,9 @@ struct BuildView: View {
                         if paxidx_swift_available() != 1 {
                             return "Swift 工具鏈不可用（到設定頁下載 Swift 工具鏈）"
                         }
+                        if !ToolchainManager.shared.isSwiftModulesOverlaid {
+                            return "Swift 標準庫模塊尚未疊加（到設定頁點「疊加 Swift 標準庫模塊」）"
+                        }
                         let cacheDir = buildDir.appendingPathComponent("ModuleCache", isDirectory: true)
                         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
                         let args = [

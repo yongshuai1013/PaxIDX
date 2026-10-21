@@ -123,6 +123,78 @@ final class ToolchainManager {
         }
     }
 
+    /// Swift 標準庫模塊是否已疊加到 SDK（6.2.4 接口就位）
+    var isSwiftModulesOverlaid: Bool {
+        guard let sdk = SDKManager.shared.sdkPath else { return false }
+        let iface = sdk.appendingPathComponent("usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface")
+        guard let text = try? String(contentsOf: iface, encoding: .utf8) else { return false }
+        return text.contains("swiftlang-6.2.4") || text.contains("Swift version 6.2.4")
+    }
+
+    /// 下載工具鏈的 Swift 標準庫模塊包，疊加（覆蓋）到 SDK 的 usr/lib/swift
+    /// SDK 底包的 stdlib 接口是 Apple Swift 6.1.2 編的，我們的 6.2.4 前端拒讀
+    /// （"this SDK is not supported by the compiler"）；換成前端自己生成的
+    /// 6.2.4 接口後版本才對得上——Nyxian 的獨立資源目錄是同一回事。
+    func downloadSwiftModules(
+        onProgress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urlString = "https://github.com/yongshuai1013/PaxIDX/releases/download/\(swiftReleaseTag)/swift-toolchain-modules.zip"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Swift 模塊下載地址無效"])))
+            return
+        }
+        guard let sdk = SDKManager.shared.sdkPath else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "請先下載 SDK，再疊加 Swift 模塊"])))
+            return
+        }
+        downloadFile(from: url, tempName: "swift-modules.zip", onProgress: onProgress) { result in
+            switch result {
+            case .success(let fileURL):
+                do {
+                    let stage = self.containerURL.appendingPathComponent("__modules_stage__", isDirectory: true)
+                    try? FileManager.default.removeItem(at: stage)
+                    try self.extract(zip: fileURL, to: stage)
+                    try? FileManager.default.removeItem(at: fileURL)
+                    // zip 內結構：swift-stdlib-ios/<模塊文件>，內容覆蓋到 usr/lib/swift
+                    let srcDir = stage.appendingPathComponent("swift-stdlib-ios", isDirectory: true)
+                    guard FileManager.default.fileExists(atPath: srcDir.path) else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "模塊包結構不對：缺 swift-stdlib-ios 目錄"])
+                    }
+                    let destDir = sdk.appendingPathComponent("usr/lib/swift", isDirectory: true)
+                    try self.overlayCopy(from: srcDir, to: destDir)
+                    try? FileManager.default.removeItem(at: stage)
+                    completion(.success(()))
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// 遞歸覆蓋複製（目錄合併、文件覆蓋）
+    private func overlayCopy(from src: URL, to dest: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+        for item in try fm.contentsOfDirectory(atPath: src.path) {
+            let s = src.appendingPathComponent(item)
+            let d = dest.appendingPathComponent(item)
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: s.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                try overlayCopy(from: s, to: d)
+            } else {
+                try? fm.removeItem(at: d)
+                try fm.copyItem(at: s, to: d)
+            }
+        }
+    }
+
     /// 刪除已下載的工具鏈
     func remove() throws {
         try FileManager.default.removeItem(at: containerURL)

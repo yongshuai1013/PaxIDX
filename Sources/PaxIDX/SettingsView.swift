@@ -22,6 +22,8 @@ struct SettingsView: View {
     @State private var downloadProgress = 0.0
     @State private var sdkMessage = ""
     @State private var toolchainMessage = ""
+    @State private var swiftModulesOverlaid = ToolchainManager.shared.isSwiftModulesOverlaid
+    @State private var isOverlayingModules = false
     @State private var showImporter = false
     @State private var isImporting = false
 
@@ -99,6 +101,25 @@ struct SettingsView: View {
                     Text("工具鏈（Clang/LLD）內建於 App，點編譯時才載入，不佔啟動內存")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    HStack {
+                        Text("Swift 標準庫模塊")
+                        Spacer()
+                        Text(swiftModulesOverlaid ? "已疊加（6.2.4）" : "未疊加")
+                            .foregroundColor(swiftModulesOverlaid ? .green : .orange)
+                    }
+                    if !swiftModulesOverlaid && !isOverlayingModules {
+                        Button("疊加 Swift 標準庫模塊") {
+                            overlaySwiftModules()
+                        }
+                        Text("SDK 底包的標準庫接口是 Apple Swift 6.1.2 的，我們的前端（6.2.4）拒讀；疊加會把工具鏈自己生成的 6.2.4 接口覆蓋進 SDK，只需做一次")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    if isOverlayingModules {
+                        Text("疊加中…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 Section(header: Text("關於")) {
                     HStack {
@@ -151,6 +172,26 @@ struct SettingsView: View {
                         sdkMessage = "已安裝到：\(url.lastPathComponent)"
                     case .failure(let error):
                         sdkMessage = "失敗：\(error.localizedDescription)"
+                    }
+                }
+            }
+        )
+    }
+
+    private func overlaySwiftModules() {
+        isOverlayingModules = true
+        toolchainMessage = "下載 Swift 模塊中…"
+        ToolchainManager.shared.downloadSwiftModules(
+            onProgress: { _ in },
+            completion: { result in
+                DispatchQueue.main.async {
+                    isOverlayingModules = false
+                    switch result {
+                    case .success:
+                        swiftModulesOverlaid = ToolchainManager.shared.isSwiftModulesOverlaid
+                        toolchainMessage = swiftModulesOverlaid ? "Swift 模塊疊加完成" : "疊加完成但驗證未過，請回報"
+                    case .failure(let error):
+                        toolchainMessage = "疊加失敗：\(error.localizedDescription)"
                     }
                 }
             }

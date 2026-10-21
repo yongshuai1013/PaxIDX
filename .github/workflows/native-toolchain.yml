@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: swift-build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v2
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v3
 
       - name: Build host TableGen tools
         shell: bash
@@ -602,7 +602,7 @@ jobs:
             -DSWIFT_BUILD_STATIC_SDK_OVERLAY=OFF \
             -DSWIFT_BUILD_STDLIB_EXTRA_TOOLCHAIN_CONTENT=OFF \
             -DSWIFT_BUILD_SOURCEKIT=OFF \
-            -DSWIFT_BUILD_SWIFT_SYNTAX=OFF \
+            -DSWIFT_BUILD_SWIFT_SYNTAX=ON \
             -DSWIFT_BUILD_REMOTE_MIRROR=OFF \
             -DSWIFT_BUILD_PERF_TESTSUITE=OFF \
             -DSWIFT_INCLUDE_TESTS=OFF \
@@ -632,6 +632,11 @@ jobs:
           ninja -C swift-build -t targets all 2>/dev/null | grep -i "stdlib" | head -20 || true
           echo "=== 開始編譯 ==="
           ninja -j2 -C swift-build swiftFrontendTool
+          # 標準庫的 swiftmodule（給設備端當前編譯器讀的接口）：stdlib 本體不編，
+          # 但模塊接口必須由這台 6.2.4 前端生成，App 疊加到 SDK 後版本才對得上。
+          # 目標名隨版本有別，兩個都試；產出由下面的打包步驟驗證（找不到就紅燈）。
+          ninja -j2 -C swift-build swiftCore-swiftmodule || true
+          ninja -j2 -C swift-build swift-stdlib-swiftmodule || true
 
       - name: Save the Swift build
         if: ${{ inputs.with_swift && !inputs.configure_only && steps.swift-build.outcome == 'success' && steps.swift-cache.outputs.cache-hit != 'true' }}
@@ -860,19 +865,21 @@ jobs:
           fi
           test -s /tmp/archives.txt
           # 打包 6.2 的 iOS Swift 模塊（.swiftmodule），App 會覆蓋到 SDK 的 usr/lib/swift
+          # 硬性要求：必須找到 Swift.swiftmodule，找不到直接紅燈——舊版在這裡靜默
+          # 跳過（|| true＋空目錄），害 release 從來沒有模塊包、App 疊加無從談起。
           if [ "${{ inputs.with_swift }}" = "true" ]; then
             mkdir -p dist/swift-stdlib-ios
-            # 找 iphoneos 的 swiftmodule
-            find swift-build/lib/swift -type d -name "iphoneos*" 2>/dev/null | head -5
-            for d in $(find swift-build/lib/swift -type d -name "*iphoneos*" 2>/dev/null); do
-              echo "找到 Swift 模塊目錄: $d"
-              cp -R -L "$d" dist/swift-stdlib-ios/ 2>/dev/null || true
+            find swift-build -type d -name "*.swiftmodule" 2>/dev/null | head -20
+            for m in $(find swift-build -name "Swift.swiftmodule" -type d 2>/dev/null); do
+              parent="$(dirname "$m")"
+              echo "找到 Swift 模塊目錄: $parent"
+              cp -R -L "$parent/." dist/swift-stdlib-ios/
             done
-            # 也試 lib/swift/iphoneos 直接路徑
-            if [ -d "swift-build/lib/swift/iphoneos" ]; then
-              cp -R -L swift-build/lib/swift/iphoneos dist/swift-stdlib-ios/ 2>/dev/null || true
+            ls -R dist/swift-stdlib-ios | head -30
+            if [ ! -d "dist/swift-stdlib-ios/Swift.swiftmodule" ]; then
+              echo "::error::沒找到 6.2.4 生成的 Swift.swiftmodule，stdlib 模塊目標沒生效"
+              exit 1
             fi
-            ls -R dist/swift-stdlib-ios 2>/dev/null | head -30 || echo "警告：沒找到 swiftmodule"
           fi
           # 打包 Clang 內建頭文件（stdarg.h 等），App 疊加到 SDK 的 usr/lib/clang/<版本>/
           # SwiftUI/Foundation 需要 ClangImporter 現場建 Darwin/C 模塊時用
