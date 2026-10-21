@@ -633,13 +633,25 @@ jobs:
           ninja -C swift-build -t targets all 2>/dev/null | grep -i "stdlib" | head -20 || true
           echo "=== 開始編譯 ==="
           ninja -j2 -C swift-build swiftFrontendTool
-          # run #16 教訓：Xcode 16.4 主機工具鏈缺 swift-compatibility-symbols，
-          # 而 swift-frontend 依賴它產生的 share 檔；原始碼工具已在本樹編出
-          # （bin/swift-compatibility-symbols），複製到主機 bin 目錄備用。
-          if [ -x swift-build/bin/swift-compatibility-symbols ]; then
-            cp swift-build/bin/swift-compatibility-symbols "$HOST_SWIFT_BIN/" || true
-            echo "已補 swift-compatibility-symbols 到主機工具鏈目錄"
-          fi
+          # run #16/#17 教訓：Xcode 16.4 主機工具鏈缺 swift-compatibility-symbols，
+          # 而 swift-frontend 的構建規則會呼叫「主機路徑的同名工具」生成
+          # share/swift/compatibility-symbols。我們的 bin/swift-frontend 在設備上
+          # 從不執行，相容符號表用不到——把規則換成寫入空檔案，繞開缺失的工具。
+          # （#17「先編工具再複製到主機 bin」的修法無效：bin/swift-frontend 被
+          # 推進同一輪 ninja 一起編，share 檔規則在複製發生之前就跑了。）
+          python3 - <<'PYEOF'
+          import re
+          p = 'swift-build/build.ninja'
+          s = open(p).read()
+          pat = re.compile(r'build share/swift/compatibility-symbols[^\n]*\n(?:[ \t][^\n]*\n)+')
+          repl = ('build share/swift/compatibility-symbols: CUSTOM_COMMAND\n'
+                  '  COMMAND = /bin/sh -c "mkdir -p share/swift && : > share/swift/compatibility-symbols"\n'
+                  '  DESC = compatibility-symbols stubbed (host Xcode lacks the tool; device frontend never executes)\n')
+          s2, n = pat.subn(repl, s)
+          assert n == 1, 'compatibility-symbols rule hits: %d' % n
+          open(p, 'w').write(s2)
+          print('compatibility-symbols 規則已換成空檔案生成')
+          PYEOF
           # 標準庫 swiftmodule：run #15 的教訓——(1) 掃描 -t targets 會把檔案路徑
           # 當目標逐個餵 ninja，又慢又吵；(2) 真正的攔路虎是設備版 swift-frontend
           # 執行檔沒編出來（缺 LLVMMCJIT，已在 LLVM 步驟補上）。這裡直接點名
