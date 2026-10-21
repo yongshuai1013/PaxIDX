@@ -1,4 +1,3 @@
-sha = 1464e69808b138d749feb4918b0f348437c3e23a
 # 在 GitHub Actions 上編譯 PaxIDX 並打出未簽名 IPA
 # 所有註釋使用正體中文
 name: Build PaxIDX IPA
@@ -72,4 +71,3 @@ jobs:
         with:
           name: PaxIDX-unsigned-ipa
           path: build/PaxIDX-unsigned.ipa
-
