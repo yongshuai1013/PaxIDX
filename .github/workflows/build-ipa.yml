@@ -1,3 +1,4 @@
+sha = 1464e69808b138d749feb4918b0f348437c3e23a
 # 在 GitHub Actions 上編譯 PaxIDX 並打出未簽名 IPA
 # 所有註釋使用正體中文
 name: Build PaxIDX IPA
@@ -44,7 +45,7 @@ jobs:
           mkdir -p Vendor/NativeToolchain
           # C 版（Swift LLVM fork，LLD iOS 封鎖已移除）：
           # 專注 C 編譯，Swift 已暫停
-          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-461274b81d86-noswift-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
+          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
           unzip -o /tmp/toolchain-dylib.zip -d Vendor/NativeToolchain
           ls -la Vendor/NativeToolchain/
 
@@ -71,3 +72,4 @@ jobs:
         with:
           name: PaxIDX-unsigned-ipa
           path: build/PaxIDX-unsigned.ipa
+
