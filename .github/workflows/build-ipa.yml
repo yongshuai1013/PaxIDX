@@ -44,7 +44,7 @@ jobs:
           mkdir -p Vendor/NativeToolchain
           # C 版（Swift LLVM fork，LLD iOS 封鎖已移除）：
           # 專注 C 編譯，Swift 已暫停
-          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
+          curl -sSL -o /tmp/toolchain-dylib.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios16.0-sdk18.5/libPaxIDXNativeToolchain.dylib.zip"
           unzip -o /tmp/toolchain-dylib.zip -d Vendor/NativeToolchain
           ls -la Vendor/NativeToolchain/
 
