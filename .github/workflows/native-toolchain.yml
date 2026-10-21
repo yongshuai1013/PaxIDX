@@ -643,14 +643,17 @@ jobs:
           import re
           p = 'swift-build/build.ninja'
           s = open(p).read()
-          pat = re.compile(r'build share/swift/compatibility-symbols[^\n]*\n(?:[ \t][^\n]*\n)+')
-          repl = ('build share/swift/compatibility-symbols: CUSTOM_COMMAND\n'
-                  '  COMMAND = /bin/sh -c "mkdir -p share/swift && : > share/swift/compatibility-symbols"\n'
-                  '  DESC = compatibility-symbols stubbed (host Xcode lacks the tool; device frontend never executes)\n')
-          s2, n = pat.subn(repl, s)
-          assert n == 1, 'compatibility-symbols rule hits: %d' % n
-          open(p, 'w').write(s2)
-          print('compatibility-symbols 規則已換成空檔案生成')
+          host = '/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/'
+          ours = '/Users/runner/work/PaxIDX/PaxIDX/swift-build/bin/'
+          n = 0
+          for tool in ('swift-compatibility-symbols', 'swift-def-to-strings-converter', 'swift-serialize-diagnostics'):
+              c = s.count(host + tool)
+              s = s.replace(host + tool, ours + tool)
+              n += c
+              print(tool, '重指向', c, '處')
+          assert n >= 1, '一處主機工具路徑都沒重指向，configure 期格式變了？'
+          open(p, 'w').write(s)
+          print('主機輔助工具路徑重指向完成，共', n, '處')
           PYEOF
           # 標準庫 swiftmodule：run #15 的教訓——(1) 掃描 -t targets 會把檔案路徑
           # 當目標逐個餵 ninja，又慢又吵；(2) 真正的攔路虎是設備版 swift-frontend
