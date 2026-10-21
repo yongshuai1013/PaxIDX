@@ -263,7 +263,22 @@ struct BuildView: View {
                     let isSwift = src.hasSuffix(".swift")
                     let (rc, diag): (Int32, String)
                     if isSwift {
-                        return "本版本專注 C 編譯器，不支援 Swift（.swift 文件）"
+                        // Swift 走 dylib 的前端封裝（paxidx_swift_compile）；
+                        // 參數集對齊封裝的解析：-target/-sdk/-module-cache-path/-o/<input.swift>
+                        if paxidx_swift_available() != 1 {
+                            return "Swift 工具鏈不可用（到設定頁下載 Swift 工具鏈）"
+                        }
+                        let cacheDir = buildDir.appendingPathComponent("ModuleCache", isDirectory: true)
+                        try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+                        let args = [
+                            "swift",
+                            "-target", "arm64-apple-ios15.0",
+                            "-sdk", sdk,
+                            "-module-cache-path", cacheDir.path,
+                            "-o", objPath,
+                            srcPath,
+                        ]
+                        (rc, diag) = runNative(args, paxidx_swift_compile)
                     } else {
                         // 構造 clang 參數
                         let args = [
@@ -285,6 +300,9 @@ struct BuildView: View {
                 }
 
                 // 鏈接
+                if objects.count > 1 {
+                    log("注意：多個源文件會一起鏈接；Swift 與 C 混編的進入點只能留一個")
+                }
                 log("鏈接…")
                 let exePath = buildDir.appendingPathComponent(project.name).path
                 let ldArgs = ["ld", "-o", exePath] + objects + [
