@@ -53,7 +53,7 @@ on:
       deployment_target:
         description: Minimum iOS version
         type: string
-        default: "15.0"
+        default: "16.0"
       cache_salt:
         description: Bump to discard the cached iOS builds (do this when the configure recipe below changes)
         type: string
@@ -498,6 +498,7 @@ jobs:
             clangBasic \
             clangDependencyScanning \
             clang-resource-headers \
+            LLVMMCJIT \
             lldMachO \
             lldCommon \
             LLVMOrcJIT
@@ -632,14 +633,23 @@ jobs:
           ninja -C swift-build -t targets all 2>/dev/null | grep -i "stdlib" | head -20 || true
           echo "=== 開始編譯 ==="
           ninja -j2 -C swift-build swiftFrontendTool
-          # 標準庫 swiftmodule：configure 已開 DYNAMIC_STDLIB/OVERLAY（run #14 證實
-          # 全關時 CMake 根本不生成 stdlib 目標，ninja 只有 phony 的 stdlib 殼）。
-          # 目標名以 -t targets 的實際輸出為準掃描，逐個嘗試；產出由打包步驟驗證。
-          echo "=== stdlib swiftmodule 候選 target ==="
-          ninja -C swift-build -t targets all 2>/dev/null | grep -i "swiftmodule" | head -30 || true
-          for t in $(ninja -C swift-build -t targets all 2>/dev/null | grep -i "swiftmodule" | cut -d: -f1 | sort -u); do
-            echo "嘗試 target: $t"
-            ninja -j2 -C swift-build "$t" || true
+          # 標準庫 swiftmodule：run #15 的教訓——(1) 掃描 -t targets 會把檔案路徑
+          # 當目標逐個餵 ninja，又慢又吵；(2) 真正的攔路虎是設備版 swift-frontend
+          # 執行檔沒編出來（缺 LLVMMCJIT，已在 LLVM 步驟補上）。這裡直接點名
+          # lib/swift/iphoneos 下的核心模塊文件目標，缺哪個在打包步驟紅燈。
+          echo "=== 生成 iphoneos 標準庫 swiftmodule ==="
+          for f in lib/swift/iphoneos/Swift.swiftmodule/arm64-apple-ios.swiftmodule \
+                   lib/swift/iphoneos/Swift.swiftmodule/arm64-apple-ios.swiftinterface \
+                   lib/swift/iphoneos/SwiftOnoneSupport.swiftmodule/arm64-apple-ios.swiftmodule \
+                   lib/swift/iphoneos/_Concurrency.swiftmodule/arm64-apple-ios.swiftmodule \
+                   lib/swift/iphoneos/_StringProcessing.swiftmodule/arm64-apple-ios.swiftmodule \
+                   lib/swift/iphoneos/_FoundationCollections.swiftmodule/arm64-apple-ios.swiftmodule; do
+            if ninja -C swift-build -t targets all 2>/dev/null | grep -q "^$f:"; then
+              echo "生成 $f"
+              ninja -j2 -C swift-build "$f"
+            else
+              echo "（無此目標，跳過）$f"
+            fi
           done
 
       - name: Save the Swift build
