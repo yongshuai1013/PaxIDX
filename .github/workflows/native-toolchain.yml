@@ -633,6 +633,13 @@ jobs:
           ninja -C swift-build -t targets all 2>/dev/null | grep -i "stdlib" | head -20 || true
           echo "=== 開始編譯 ==="
           ninja -j2 -C swift-build swiftFrontendTool
+          # run #16 教訓：Xcode 16.4 主機工具鏈缺 swift-compatibility-symbols，
+          # 而 swift-frontend 依賴它產生的 share 檔；原始碼工具已在本樹編出
+          # （bin/swift-compatibility-symbols），複製到主機 bin 目錄備用。
+          if [ -x swift-build/bin/swift-compatibility-symbols ]; then
+            cp swift-build/bin/swift-compatibility-symbols "$HOST_SWIFT_BIN/" || true
+            echo "已補 swift-compatibility-symbols 到主機工具鏈目錄"
+          fi
           # 標準庫 swiftmodule：run #15 的教訓——(1) 掃描 -t targets 會把檔案路徑
           # 當目標逐個餵 ninja，又慢又吵；(2) 真正的攔路虎是設備版 swift-frontend
           # 執行檔沒編出來（缺 LLVMMCJIT，已在 LLVM 步驟補上）。這裡直接點名
