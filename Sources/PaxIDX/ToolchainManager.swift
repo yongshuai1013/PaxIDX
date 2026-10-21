@@ -17,7 +17,7 @@ final class ToolchainManager {
     private let cDylibName = "libPaxIDXNativeToolchain.dylib"
     
     // MARK: - Swift 工具鏈（含 Swift 6.2.4 前端）
-    private let swiftReleaseTag = "toolchain-8f0d2ca924db-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5"
+    private let swiftReleaseTag = "toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5"
     /// release 上的資產名（構建產物沿用 NativeToolchain 命名）
     private let swiftDylibAssetName = "libPaxIDXNativeToolchain.dylib.zip"
     /// 解壓後在裝置上的檔名（與 C 版區分，不覆蓋已驗收的 C dylib）

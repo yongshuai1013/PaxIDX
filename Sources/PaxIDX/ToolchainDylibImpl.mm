@@ -278,6 +278,13 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
         }
         // 不存在就不傳，退回默認行為（至少 pure Swift 能用）
     }
+    // 對齊 Nyxian 的 Swift 參數配方（NXSwiftFlagsForCodeTemplateLanguage）：
+    // 開 ObjC 互通，前端才能 import Foundation/UIKit 這類 ObjC 框架；
+    // -parse-as-library 讓 @main／頂層代碼按庫模式解析（App 類專案同款）。
+    // performFrontend 直接吃前端參數，-Xfrontend 原樣透傳（Nyxian 同款寫法）。
+    owned.push_back("-Xfrontend");
+    owned.push_back("-enable-objc-interop");
+    owned.push_back("-parse-as-library");
     owned.push_back("-emit-object");
     owned.push_back("-o"); owned.push_back(output);
     owned.push_back(src);
