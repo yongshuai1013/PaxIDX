@@ -154,14 +154,80 @@ static std::string sdkVersion(const char *sdkPath, const char *fallback) {
 
 // Swift 前端（僅 Swift 版 dylib 有，C 版不編這段）
 // 最小化：只前向聲明需要的函數，不 include Swift 頭文件（shims 依賴太深編不過）
-// 注意：不調 initializeSwiftModules()——該符號在只編 swiftFrontendTool 時不存在，
-// 且 Swift 官方說 swift-frontend 不嚴格要求它
+//
+// 調用序列對齊 Nyxian 的 CoreCompiler（CCSwiftCompilerJobExecute）：
+//   1. initializeSwiftModules() 先調一次（std::call_once）
+//   2. performFrontend 之前摘掉 LLVM fatal error handler，之後裝回自訂的
+//   3. performFrontend 的診斷默認打到 stderr——調用期間把 fd 2 重定向到
+//      臨時文件，結束讀回填進 diagnostics，失敗不再是「rc=1，無診斷」
+//
+// initializeSwiftModules 在上游 SwiftCompilerSources/stubs.cpp 裡就是
+// 一個空樁（void initializeSwiftModules() {}），只為滿足鏈接器存在；
+// 我們只編 swiftFrontendTool、沒鏈 SwiftCompilerSources，所以當年一調它
+// 就報符號不存在。這裡補上同一個空樁，純粹跟上游 main 的調用習慣對齊。
 #ifdef PAXIDX_HAS_SWIFT_FRONTEND
+#include <llvm/Support/ErrorHandling.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+
+extern "C" void initializeSwiftModules() {}
+
 namespace swift {
 class FrontendObserver;
 int performFrontend(llvm::ArrayRef<const char *> Args, const char *Argv0,
                     void *Context, FrontendObserver *observer);
 } // namespace swift
+
+namespace {
+
+// 跟 Nyxian 的 CCLLVMErrorHandler 同款：印出原因後 abort（fatal 本無路可退）
+void paxidxLLVMFatalHandler(void *userData, const char *reason, bool genCrashDiag) {
+    (void)userData; (void)genCrashDiag;
+    fprintf(stderr, "paxidx swift: fatal LLVM error: %s\n", reason);
+    abort();
+}
+
+void initSwiftModulesOnce() {
+    static std::once_flag flag;
+    std::call_once(flag, [] { initializeSwiftModules(); });
+}
+
+// RAII：構造時把 stderr 重定向到臨時文件，finish() 恢復 fd 並讀回內容
+struct StderrCapture {
+    int savedFd = -1;
+    int fileFd = -1;
+    std::string path;
+    explicit StderrCapture(NSString *tmpDir) {
+        NSString *p = [tmpDir stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"paxidx-swift-stderr-%d.txt", (int)getpid()]];
+        path = std::string([p UTF8String]);
+        fflush(stderr);
+        savedFd = dup(STDERR_FILENO);
+        fileFd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fileFd >= 0 && savedFd >= 0) dup2(fileFd, STDERR_FILENO);
+    }
+    std::string finish() {
+        fflush(stderr);
+        if (savedFd >= 0) { dup2(savedFd, STDERR_FILENO); close(savedFd); savedFd = -1; }
+        if (fileFd >= 0) { close(fileFd); fileFd = -1; }
+        std::string text;
+        if (!path.empty()) {
+            if (FILE *f = fopen(path.c_str(), "r")) {
+                char buf[4096]; size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+                fclose(f);
+            }
+            unlink(path.c_str());
+            path.clear();
+        }
+        return text;
+    }
+    ~StderrCapture() { if (savedFd >= 0 || fileFd >= 0) finish(); }
+};
+
+} // namespace
 
 extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                                     char *diagnostics, size_t diagnostics_capacity) {
@@ -219,11 +285,22 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     args.reserve(owned.size());
     for (auto &s : owned) args.push_back(s.c_str());
 
-    int result = swift::performFrontend(
-        llvm::ArrayRef<const char *>(args.data(), args.size()),
-        "swift-frontend", nullptr, nullptr);
+    initSwiftModulesOnce();
+    llvm::remove_fatal_error_handler();
+    int result;
+    std::string captured;
+    {
+        StderrCapture cap(NSTemporaryDirectory());
+        result = swift::performFrontend(
+            llvm::ArrayRef<const char *>(args.data(), args.size()),
+            "swift-frontend", nullptr, nullptr);
+        captured = cap.finish();
+    }
+    llvm::install_fatal_error_handler(paxidxLLVMFatalHandler);
     if (result != 0) {
-        copyDiag("paxidx swift: 編譯失敗（rc=1，無診斷）",
+        copyDiag(captured.empty()
+                     ? "paxidx swift: 編譯失敗（stderr 無輸出）"
+                     : captured,
                  diagnostics, diagnostics_capacity);
         return 1;
     }
