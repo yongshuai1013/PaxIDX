@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: swift-build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v3
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v4
 
       - name: Build host TableGen tools
         shell: bash
@@ -596,9 +596,9 @@ jobs:
             -DSWIFT_HOST_VARIANT_SDK=IOS \
             -DSWIFT_HOST_VARIANT_ARCH=arm64 \
             -DSWIFT_DARWIN_DEPLOYMENT_VERSION_IOS="$IOS_DEPLOYMENT_TARGET" \
-            -DSWIFT_BUILD_DYNAMIC_STDLIB=OFF \
+            -DSWIFT_BUILD_DYNAMIC_STDLIB=ON \
             -DSWIFT_BUILD_STATIC_STDLIB=OFF \
-            -DSWIFT_BUILD_DYNAMIC_SDK_OVERLAY=OFF \
+            -DSWIFT_BUILD_DYNAMIC_SDK_OVERLAY=ON \
             -DSWIFT_BUILD_STATIC_SDK_OVERLAY=OFF \
             -DSWIFT_BUILD_STDLIB_EXTRA_TOOLCHAIN_CONTENT=OFF \
             -DSWIFT_BUILD_SOURCEKIT=OFF \
@@ -632,11 +632,15 @@ jobs:
           ninja -C swift-build -t targets all 2>/dev/null | grep -i "stdlib" | head -20 || true
           echo "=== 開始編譯 ==="
           ninja -j2 -C swift-build swiftFrontendTool
-          # 標準庫的 swiftmodule（給設備端當前編譯器讀的接口）：stdlib 本體不編，
-          # 但模塊接口必須由這台 6.2.4 前端生成，App 疊加到 SDK 後版本才對得上。
-          # 目標名隨版本有別，兩個都試；產出由下面的打包步驟驗證（找不到就紅燈）。
-          ninja -j2 -C swift-build swiftCore-swiftmodule || true
-          ninja -j2 -C swift-build swift-stdlib-swiftmodule || true
+          # 標準庫 swiftmodule：configure 已開 DYNAMIC_STDLIB/OVERLAY（run #14 證實
+          # 全關時 CMake 根本不生成 stdlib 目標，ninja 只有 phony 的 stdlib 殼）。
+          # 目標名以 -t targets 的實際輸出為準掃描，逐個嘗試；產出由打包步驟驗證。
+          echo "=== stdlib swiftmodule 候選 target ==="
+          ninja -C swift-build -t targets all 2>/dev/null | grep -i "swiftmodule" | head -30 || true
+          for t in $(ninja -C swift-build -t targets all 2>/dev/null | grep -i "swiftmodule" | cut -d: -f1 | sort -u); do
+            echo "嘗試 target: $t"
+            ninja -j2 -C swift-build "$t" || true
+          done
 
       - name: Save the Swift build
         if: ${{ inputs.with_swift && !inputs.configure_only && steps.swift-build.outcome == 'success' && steps.swift-cache.outputs.cache-hit != 'true' }}
