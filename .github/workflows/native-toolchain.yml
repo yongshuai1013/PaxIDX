@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: swift-build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v6
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v7
 
       - name: Build host TableGen tools
         shell: bash
@@ -978,6 +978,14 @@ jobs:
           if [ "${{ inputs.with_swift }}" = "true" ]; then
             find swift-build/lib -maxdepth 3 -type f -name '*.a' -print | sort >> /tmp/archives.txt
           fi
+          # PaxIDX：libswiftASTGen／libswiftMacroEvaluation 不併入大庫。它們是唯二
+          # 引用 _CompilerSwift*（swift-syntax 編譯器支援庫，只有 macOS host 版、
+          # 沒有 iOS arm64 版）的庫；它們對 C++ 前端的入口全是 C 橋接函數，改由
+          # Toolchain/ASTGenBridgingStubs.cpp 提供裝置端實作（run #29）。
+          if [ "${{ inputs.with_swift }}" = "true" ]; then
+            grep -v -e '/libswiftASTGen\.a$' -e '/libswiftMacroEvaluation\.a$' /tmp/archives.txt > /tmp/archives-filtered.txt
+            mv /tmp/archives-filtered.txt /tmp/archives.txt
+          fi
           test -s /tmp/archives.txt
           # 打包 6.2 的 iOS Swift 模塊（.swiftmodule），App 會覆蓋到 SDK 的 usr/lib/swift
           # 硬性要求：必須找到 Swift.swiftmodule，找不到直接紅燈——舊版在這裡靜默
@@ -1037,11 +1045,10 @@ jobs:
           ls -la dist/lib/libPaxIDXNativeToolchain.a
 
           # 把靜態庫鏈成 dylib：App 下載後用 dlopen 載入（啟動時不佔內存，點編譯才載入）
-          # 不用 -all_load：dylib 的邊界就是 exported_symbols_list 的 4 個入口，
-          # 普通連結只拉引用鏈碰得到的 object（跟 bin/swift-frontend 同款，它的
-          # Swift 入口同樣是 swift::performFrontend）。-all_load 會把宏評估／ASTGen
-          # 的 object 也拖進來，它們引用的 _CompilerSwift* 符號只有 macOS host
-          # 版、沒有 iOS arm64 靜態庫——run #27 就死在這裡。
+          # 不用 -all_load，而且合併時已排除 ASTGen／MacroEvaluation 兩庫（見上）：
+          # performFrontend 的引用鏈本來就走到宏評估／ASTGen（#28 證實），它們的
+          # object 引用 _CompilerSwift*，只有 macOS host 版——#27／#28 都死在這。
+          # 兩庫的 C 橋接入口由 ASTGenBridgingStubs.o 提供裝置端實作，一起鏈入。
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           # 先編 dylib 的實現（paxidx_dylib_*，調用 clang/lld API）
           # Swift 版加 -DPAXIDX_HAS_SWIFT_FRONTEND 和 Swift 頭文件路徑
@@ -1071,6 +1078,29 @@ jobs:
               tail -30 /tmp/dylib-impl-errors.txt
               exit 1
             }
+          # ASTGen／MacroEvaluation 的 C 橋接入口（裝置端實作，見該檔檔頭）；
+          # 旗標與 ToolchainDylibImpl.o 完全一致。C 版（with_swift=false）前端
+          # 不引用這些符號，不編也不鏈。
+          STUB_OBJ=""
+          if [ "${{ inputs.with_swift }}" = "true" ]; then
+            xcrun --sdk iphoneos clang++ \
+              -std=c++17 \
+              -arch arm64 \
+              -miphoneos-version-min=$IOS_DEPLOYMENT_TARGET \
+              -isysroot "$SDK" \
+              -I dist/include \
+              -I dist/include-generated \
+              -I Sources/PaxIDX \
+              $DYLIB_EXTRA_FLAGS \
+              -c Toolchain/ASTGenBridgingStubs.cpp \
+              -o /tmp/ASTGenBridgingStubs.o \
+              2> /tmp/stub-compile-errors.txt || {
+                echo "::error::compiling ASTGenBridgingStubs.cpp failed"
+                tail -30 /tmp/stub-compile-errors.txt
+                exit 1
+              }
+            STUB_OBJ="/tmp/ASTGenBridgingStubs.o"
+          fi
           # 當 with_swift=false 時，過濾掉 Swift 符號（ToolchainDylibImpl.mm 的 Swift
           # 入口有 #ifdef 保護，C 版不會編譯，但導出列表無條件列出會導致鏈接報
           # Undefined symbols）
@@ -1086,6 +1116,7 @@ jobs:
             -miphoneos-version-min=$IOS_DEPLOYMENT_TARGET \
             -isysroot "$SDK" \
             /tmp/ToolchainDylibImpl.o \
+            $STUB_OBJ \
             dist/lib/libPaxIDXNativeToolchain.a \
             -Wl,-exported_symbols_list,"$EXPORTED_SYMBOLS" \
             -lc++ -lz -liconv -lsqlite3 \
