@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: swift-build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v5
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v6
 
       - name: Build host TableGen tools
         shell: bash
@@ -549,6 +549,54 @@ jobs:
             echo "reusable=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Restore the host Swift 6.2.4 toolchain
+        if: ${{ inputs.with_swift }}
+        id: host-swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: host-swift-toolchain
+          key: host-swift-6.2.4-osx-toolchain-v1
+
+      - name: Fetch the host Swift 6.2.4 toolchain
+        if: ${{ inputs.with_swift && steps.host-swift-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Generating the iphoneos stdlib modules shells out to
+          # ${SWIFT_NATIVE_SWIFT_TOOLS_PATH}/swiftc, which must be a
+          # HOST-runnable swiftc of the SAME version as the stdlib sources
+          # (6.2.4). Xcode 16.4's swiftc is 6.1.2 and rejects current stdlib
+          # source/flags; llvm-host-build/bin holds only LLVM tools and has
+          # no swiftc at all. The official swift.org macOS toolchain package
+          # provides the matching host swiftc plus its host plugins.
+          curl -fL --retry 3 -o /tmp/swift-6.2.4-RELEASE-osx.pkg \
+            "https://download.swift.org/swift-6.2.4-release/xcode/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE-osx.pkg"
+          rm -rf /tmp/swift-6.2.4-expanded host-swift-toolchain
+          pkgutil --expand-full /tmp/swift-6.2.4-RELEASE-osx.pkg /tmp/swift-6.2.4-expanded
+          SWIFTC_PATH="$(find /tmp/swift-6.2.4-expanded -path '*usr/bin/swiftc' -type f | head -n 1)"
+          test -n "$SWIFTC_PATH"
+          TC_ROOT="$(dirname "$(dirname "$(dirname "$SWIFTC_PATH")")")"
+          mkdir -p host-swift-toolchain
+          cp -a "$TC_ROOT" host-swift-toolchain/
+
+      - name: Save the host Swift 6.2.4 toolchain
+        if: ${{ inputs.with_swift && steps.host-swift-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.host-swift-cache.outputs.cache-primary-key }}
+          path: host-swift-toolchain
+
+      - name: Locate the host Swift 6.2.4 toolchain
+        if: ${{ inputs.with_swift }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -type f | head -n 1)"
+          test -n "$SWIFTC_PATH"
+          test -x "$SWIFTC_PATH"
+          "$SWIFTC_PATH" --version | grep -F 'Swift version 6.2.4'
+          echo "HOST_SWIFT_624_BIN=$(dirname "$SWIFTC_PATH")" >> "$GITHUB_ENV"
+
       - name: Configure the Swift frontend for iPhoneOS
         if: ${{ inputs.with_swift && (steps.swift-cache.outputs.cache-hit != 'true' || steps.swift-tree.outputs.reusable != 'true') }}
         shell: bash
@@ -588,7 +636,7 @@ jobs:
             -DCLANG_TABLEGEN="$PWD/llvm-host-build/bin/clang-tblgen" \
             -DSWIFT_NATIVE_LLVM_TOOLS_PATH="$PWD/llvm-host-build/bin" \
             -DSWIFT_NATIVE_CLANG_TOOLS_PATH="$PWD/llvm-host-build/bin" \
-            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$PWD/llvm-host-build/bin" \
+            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$HOST_SWIFT_624_BIN" \
             -DSWIFT_PATH_TO_CMARK_BUILD="$PWD/cmark-ios-build" \
             -DSWIFT_PATH_TO_CMARK_SOURCE="$PWD/swift-cmark" \
             -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$PWD/swift-experimental-string-processing" \
