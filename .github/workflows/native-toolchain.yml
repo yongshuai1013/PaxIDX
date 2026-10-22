@@ -297,7 +297,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: swift-build
-          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v4
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ env.SWIFT_REF }}-${{ env.SWIFT_LLVM_REF }}-${{ steps.toolchain-versions.outputs.value }}-${{ env.IOS_DEPLOYMENT_TARGET }}-v5
 
       - name: Build host TableGen tools
         shell: bash
@@ -588,7 +588,7 @@ jobs:
             -DCLANG_TABLEGEN="$PWD/llvm-host-build/bin/clang-tblgen" \
             -DSWIFT_NATIVE_LLVM_TOOLS_PATH="$PWD/llvm-host-build/bin" \
             -DSWIFT_NATIVE_CLANG_TOOLS_PATH="$PWD/llvm-host-build/bin" \
-            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$HOST_SWIFT_BIN" \
+            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$PWD/llvm-host-build/bin" \
             -DSWIFT_PATH_TO_CMARK_BUILD="$PWD/cmark-ios-build" \
             -DSWIFT_PATH_TO_CMARK_SOURCE="$PWD/swift-cmark" \
             -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$PWD/swift-experimental-string-processing" \
