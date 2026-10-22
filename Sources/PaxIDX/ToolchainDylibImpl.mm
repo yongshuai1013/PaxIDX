@@ -171,8 +171,36 @@ static std::string sdkVersion(const char *sdkPath, const char *fallback) {
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <fcntl.h>
+#include <unistd.h>
 
 extern "C" void initializeSwiftModules() {}
+
+// 診斷（2026-10-22 真機 Swift 編譯一按就閃退且無系統日誌而加）：
+// 把檢查點與前端 stderr 留在 App 的 Documents，崩了也能事後翻出來。
+static std::string paxidxDocumentsDir() {
+    NSArray *dirs = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *d = dirs.firstObject;
+    return d ? std::string([d UTF8String]) : std::string("/tmp");
+}
+static void paxidxDebugNote(const std::string &line) {
+    std::string path = paxidxDocumentsDir() + "/paxidx-swift-debug.log";
+    int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        (void)!write(fd, line.data(), line.size());
+        (void)!write(fd, "\n", 1);
+        close(fd);
+    }
+}
+static std::string paxidxJoinArgs(int argc, const char * const *argv) {
+    std::string out;
+    for (int i = 0; i < argc; i++) {
+        if (i) out += " | ";
+        out += argv[i] ? argv[i] : "(null)";
+    }
+    return out;
+}
 
 namespace swift {
 class FrontendObserver;
@@ -201,7 +229,7 @@ struct StderrCapture {
     std::string path;
     explicit StderrCapture(NSString *tmpDir) {
         NSString *p = [tmpDir stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"paxidx-swift-stderr-%d.txt", (int)getpid()]];
+            @"paxidx-swift-stderr.txt"];
         path = std::string([p UTF8String]);
         fflush(stderr);
         savedFd = dup(STDERR_FILENO);
@@ -219,8 +247,7 @@ struct StderrCapture {
                 while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
                 fclose(f);
             }
-            unlink(path.c_str());
-            path.clear();
+            path.clear(); // 診斷版：不刪檔，留在 Documents 供事後檢查
         }
         return text;
     }
@@ -231,6 +258,10 @@ struct StderrCapture {
 
 extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                                     char *diagnostics, size_t diagnostics_capacity) {
+    paxidxDebugNote("==== swift_compile run pid=" +
+                    std::to_string((int)getpid()) + " argc=" +
+                    std::to_string(argc) + " argv: " +
+                    paxidxJoinArgs(argc, argv));
     const char *target = argValue(argc, argv, "-target");
     const char *sdk = argValue(argc, argv, "-sdk");
     const char *output = argValue(argc, argv, "-o");
@@ -292,18 +323,30 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     args.reserve(owned.size());
     for (auto &s : owned) args.push_back(s.c_str());
 
+    {
+        std::string joined;
+        for (size_t i = 0; i < args.size(); i++) {
+            if (i) joined += " | ";
+            joined += args[i] ? args[i] : "(null)";
+        }
+        paxidxDebugNote("M2 frontend args: " + joined);
+    }
     initSwiftModulesOnce();
     llvm::remove_fatal_error_handler();
     int result;
     std::string captured;
     {
-        StderrCapture cap(NSTemporaryDirectory());
+        NSString *docsDir = [NSString stringWithUTF8String:paxidxDocumentsDir().c_str()];
+        StderrCapture cap(docsDir);
+        paxidxDebugNote("M3 calling performFrontend");
         result = swift::performFrontend(
             llvm::ArrayRef<const char *>(args.data(), args.size()),
             "swift-frontend", nullptr, nullptr);
         captured = cap.finish();
     }
     llvm::install_fatal_error_handler(paxidxLLVMFatalHandler);
+    paxidxDebugNote("M4 performFrontend returned rc=" + std::to_string(result) +
+                    " captured_bytes=" + std::to_string(captured.size()));
     if (result != 0) {
         copyDiag(captured.empty()
                      ? "paxidx swift: 編譯失敗（stderr 無輸出）"
