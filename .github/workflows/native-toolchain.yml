@@ -581,8 +581,11 @@ jobs:
           find /tmp/swift-pkg-x -name Payload -type f -print0 | while IFS= read -r -d '' payload; do
             tar -xf "$payload" -C /tmp/swift-pkg-x/extracted
           done
-          find /tmp/swift-pkg-x/extracted -maxdepth 6 -print | head -n 60
-          SWIFTC_PATH="$(find /tmp/swift-pkg-x/extracted -path '*usr/bin/swiftc' | head -n 1)"
+          # Print via a file, not a pipe: `find | head` under pipefail
+          # killed run #26 when head closed the pipe early (SIGPIPE).
+          find /tmp/swift-pkg-x/extracted -maxdepth 6 -print > /tmp/extracted-tree.txt
+          head -n 60 /tmp/extracted-tree.txt
+          SWIFTC_PATH="$(find /tmp/swift-pkg-x/extracted -path '*usr/bin/swiftc' -print -quit)"
           test -n "$SWIFTC_PATH"
           TC_ROOT="$(dirname "$(dirname "$(dirname "$SWIFTC_PATH")")")"
           mkdir -p host-swift-toolchain
@@ -600,7 +603,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -type f | head -n 1)"
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
           test -n "$SWIFTC_PATH"
           test -x "$SWIFTC_PATH"
           "$SWIFTC_PATH" --version | grep -F 'Swift version 6.2.4'
