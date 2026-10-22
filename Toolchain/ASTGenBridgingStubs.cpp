@@ -364,9 +364,11 @@ bool swift_Macros_pluginServerLoadLibraryPlugin(void *, const char *,
 // 呼叫；回 nullptr = 沒有解析結果，是呼叫方能正常處理的答案。這個庫
 // 的 object 同時引用 swiftASTGen 的 ExportedSourceFile 與
 // _CompilerSwiftIDEUtils，所以跟前兩個庫一樣排除＋樁。
-void *swift_SwiftIDEUtilsBridging_runNameMatcher(const void *,
-                                                 const BridgedSourceLoc *,
-                                                 size_t) {
+// 注意：這個入口沒有 Bridging 標頭宣告它（呼叫方 lib/IDE/Utils.cpp 是
+// 本地 extern "C" 宣告），定義必須自己帶 extern "C"，否則會被 C++
+// name mangling 成別的符號——run #30 就死在這一個符號上。
+extern "C" void *swift_SwiftIDEUtilsBridging_runNameMatcher(
+    const void *, const BridgedSourceLoc *, size_t) {
   return nullptr;
 }
 
