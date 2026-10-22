@@ -571,9 +571,18 @@ jobs:
           # provides the matching host swiftc plus its host plugins.
           curl -fL --retry 3 -o /tmp/swift-6.2.4-RELEASE-osx.pkg \
             "https://download.swift.org/swift-6.2.4-release/xcode/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE-osx.pkg"
-          rm -rf /tmp/swift-6.2.4-expanded host-swift-toolchain
-          pkgutil --expand-full /tmp/swift-6.2.4-RELEASE-osx.pkg /tmp/swift-6.2.4-expanded
-          SWIFTC_PATH="$(find /tmp/swift-6.2.4-expanded -path '*usr/bin/swiftc' -type f | head -n 1)"
+          rm -rf /tmp/swift-pkg-x host-swift-toolchain
+          mkdir -p /tmp/swift-pkg-x/extracted
+          xar -xf /tmp/swift-6.2.4-RELEASE-osx.pkg -C /tmp/swift-pkg-x
+          # pkgutil --expand-full (tried in run #25) expands the package
+          # without materializing a usr/bin/swiftc file anywhere in the
+          # tree, so extract each component Payload (gzip cpio) directly
+          # with bsdtar, which detects the format itself.
+          find /tmp/swift-pkg-x -name Payload -type f -print0 | while IFS= read -r -d '' payload; do
+            tar -xf "$payload" -C /tmp/swift-pkg-x/extracted
+          done
+          find /tmp/swift-pkg-x/extracted -maxdepth 6 -print | head -n 60
+          SWIFTC_PATH="$(find /tmp/swift-pkg-x/extracted -path '*usr/bin/swiftc' | head -n 1)"
           test -n "$SWIFTC_PATH"
           TC_ROOT="$(dirname "$(dirname "$(dirname "$SWIFTC_PATH")")")"
           mkdir -p host-swift-toolchain
