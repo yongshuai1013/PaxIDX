@@ -664,6 +664,13 @@ jobs:
               print('stub 命中', n)
               total += n
           assert total == 2, 'stub 命中數不對: %d' % total
+          # run #22：stdlib 模塊命令裡的 -strict-memory-safety 是較新世代的
+          # driver 旗標，主機的 Xcode 16.4 swiftc（6.1.2）不認、直接拒收整條
+          # 命令。生成端是它、旗標只是屬性標記——從 build.ninja 拿掉即可，
+          # 模塊內容不受影響（我們的 6.2.4 前端讀接口時不查這個旗標）。
+          c = s.count(' -strict-memory-safety')
+          s = s.replace(' -strict-memory-safety', '')
+          print('移除 -strict-memory-safety 共', c, '處')
           open(p, 'w').write(s)
           print('兩條 share 生成規則已全部 stub')
           PYEOF
