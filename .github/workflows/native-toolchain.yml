@@ -978,12 +978,13 @@ jobs:
           if [ "${{ inputs.with_swift }}" = "true" ]; then
             find swift-build/lib -maxdepth 3 -type f -name '*.a' -print | sort >> /tmp/archives.txt
           fi
-          # PaxIDX：libswiftASTGen／libswiftMacroEvaluation 不併入大庫。它們是唯二
-          # 引用 _CompilerSwift*（swift-syntax 編譯器支援庫，只有 macOS host 版、
-          # 沒有 iOS arm64 版）的庫；它們對 C++ 前端的入口全是 C 橋接函數，改由
-          # Toolchain/ASTGenBridgingStubs.cpp 提供裝置端實作（run #29）。
+          # PaxIDX：前端裡 Swift 寫的三個橋接庫不併入大庫——libswiftASTGen、
+          # libswiftMacroEvaluation（#27／#28 的 _CompilerSwift* 未定義符號來源）
+          # 與 libswiftIDEUtilsBridging（#29 才露面：引用 ASTGen 型別與
+          # _CompilerSwiftIDEUtils）。它們對 C++ 前端的入口全是 C 橋接函數，改由
+          # Toolchain/ASTGenBridgingStubs.cpp 提供裝置端實作。
           if [ "${{ inputs.with_swift }}" = "true" ]; then
-            grep -v -e '/libswiftASTGen\.a$' -e '/libswiftMacroEvaluation\.a$' /tmp/archives.txt > /tmp/archives-filtered.txt
+            grep -v -e '/libswiftASTGen\.a$' -e '/libswiftMacroEvaluation\.a$' -e '/libswiftIDEUtilsBridging\.a$' /tmp/archives.txt > /tmp/archives-filtered.txt
             mv /tmp/archives-filtered.txt /tmp/archives.txt
           fi
           test -s /tmp/archives.txt
@@ -1045,7 +1046,7 @@ jobs:
           ls -la dist/lib/libPaxIDXNativeToolchain.a
 
           # 把靜態庫鏈成 dylib：App 下載後用 dlopen 載入（啟動時不佔內存，點編譯才載入）
-          # 不用 -all_load，而且合併時已排除 ASTGen／MacroEvaluation 兩庫（見上）：
+          # 不用 -all_load，而且合併時已排除三個 Swift 橋接庫（見上）：
           # performFrontend 的引用鏈本來就走到宏評估／ASTGen（#28 證實），它們的
           # object 引用 _CompilerSwift*，只有 macOS host 版——#27／#28 都死在這。
           # 兩庫的 C 橋接入口由 ASTGenBridgingStubs.o 提供裝置端實作，一起鏈入。

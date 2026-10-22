@@ -4,13 +4,16 @@
 // C 橋接入口實作。
 //
 // 為什麼需要這個檔案：
-//   libswiftASTGen.a 與 libswiftMacroEvaluation.a 是整棵前端裡唯二引用
-//   _CompilerSwift* 符號的庫（swift-syntax 的「編譯器支援庫」：
-//   _CompilerSwiftSyntax、_CompilerSwiftParser、…）。那些庫在官方構建裡
-//   只產 macOS host 版，從沒為 iPhoneOS arm64 編過——run #27／#28 的
-//   dylib 連結就死在這組未定義符號上。所以 Stage 合併大庫時排除這兩個
-//   庫，由本檔案提供它們對 C++ 前端的全部 C 入口（簽名照
-//   swift/Bridging/ASTGen.h 與 swift/Bridging/MacroEvaluation.h）。
+//   前端裡 Swift 寫的庫只有三個（同一個 SwiftPM 套件 ASTGen 的三個
+//   模塊）：libswiftASTGen.a、libswiftMacroEvaluation.a、
+//   libswiftIDEUtilsBridging.a。它們都直接或間接引用 _CompilerSwift*
+//   符號（swift-syntax 的「編譯器支援庫」：_CompilerSwiftSyntax、
+//   _CompilerSwiftParser、_CompilerSwiftIDEUtils、…）。那些庫在官方
+//   構建裡只產 macOS host 版，從沒為 iPhoneOS arm64 編過——run #27／
+//   #28 的 dylib 連結死在前兩個庫、#29 死在第三個。所以 Stage 合併
+//   大庫時三個都排除，由本檔案提供它們對 C++ 前端的全部 C 入口
+//   （簽名照 swift/Bridging/ASTGen.h 與 swift/Bridging/MacroEvaluation.h；
+//   IDEUtils 的入口照其 Swift 源碼的 @_cdecl 簽名）。
 //
 // 裝置端的行為邊界（誠實申報，不是假裝支援）：
 //   * 宏（macros）：不支援。expand* 入口一律回「沒有產出」，呼叫方
@@ -350,6 +353,21 @@ bool swift_Macros_pluginServerLoadLibraryPlugin(void *, const char *,
   if (errorOut)
     *errorOut = BridgedStringRef();
   return false;
+}
+
+//===----------------------------------------------------------------------===//
+// SwiftIDEUtilsBridging —— IDE 名稱匹配（批次編譯不用，run #30 補）
+//===----------------------------------------------------------------------===//
+
+// lib/ASTGen/Sources/SwiftIDEUtilsBridging 的唯一入口：替 IDE 的改名／
+// 找引用功能把宣告位置解析成名稱位置。批次編譯（performFrontend）不
+// 呼叫；回 nullptr = 沒有解析結果，是呼叫方能正常處理的答案。這個庫
+// 的 object 同時引用 swiftASTGen 的 ExportedSourceFile 與
+// _CompilerSwiftIDEUtils，所以跟前兩個庫一樣排除＋樁。
+void *swift_SwiftIDEUtilsBridging_runNameMatcher(const void *,
+                                                 const BridgedSourceLoc *,
+                                                 size_t) {
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
