@@ -1037,7 +1037,11 @@ jobs:
           ls -la dist/lib/libPaxIDXNativeToolchain.a
 
           # 把靜態庫鏈成 dylib：App 下載後用 dlopen 載入（啟動時不佔內存，點編譯才載入）
-          # -all_load 確保 .a 裡所有 object 都進 dylib（跟靜態鏈接的 -force_load 一個作用）
+          # 不用 -all_load：dylib 的邊界就是 exported_symbols_list 的 4 個入口，
+          # 普通連結只拉引用鏈碰得到的 object（跟 bin/swift-frontend 同款，它的
+          # Swift 入口同樣是 swift::performFrontend）。-all_load 會把宏評估／ASTGen
+          # 的 object 也拖進來，它們引用的 _CompilerSwift* 符號只有 macOS host
+          # 版、沒有 iOS arm64 靜態庫——run #27 就死在這裡。
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           # 先編 dylib 的實現（paxidx_dylib_*，調用 clang/lld API）
           # Swift 版加 -DPAXIDX_HAS_SWIFT_FRONTEND 和 Swift 頭文件路徑
@@ -1082,7 +1086,7 @@ jobs:
             -miphoneos-version-min=$IOS_DEPLOYMENT_TARGET \
             -isysroot "$SDK" \
             /tmp/ToolchainDylibImpl.o \
-            -Wl,-all_load,dist/lib/libPaxIDXNativeToolchain.a \
+            dist/lib/libPaxIDXNativeToolchain.a \
             -Wl,-exported_symbols_list,"$EXPORTED_SYMBOLS" \
             -lc++ -lz -liconv -lsqlite3 \
             -framework Foundation \
