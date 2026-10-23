@@ -173,6 +173,12 @@ static std::string sdkVersion(const char *sdkPath, const char *fallback) {
 #include <mutex>
 #include <fcntl.h>
 #include <unistd.h>
+#include <csignal>
+#include <atomic>
+#include <thread>
+#include <dirent.h>
+#include <execinfo.h>
+#include <mach/mach.h>
 
 extern "C" void initializeSwiftModules() {}
 
@@ -200,6 +206,63 @@ static std::string paxidxJoinArgs(int argc, const char * const *argv) {
         out += argv[i] ? argv[i] : "(null)";
     }
     return out;
+}
+
+// 診斷 v2（2026-10-23）：v1 證實死點在 performFrontend 內部且 stderr 全空
+// （無聲死亡）。這一版要分清三種死法：
+//   a) trap／段錯 → 下面的信號處理器會留下信號號＋回溯；
+//   b) exit() → atexit 標記會留下；
+//   c) jetsam SIGKILL（抓不到）→ 心跳線程留下的 footprint 曲線會在死前
+//      一路爬升、且既無 SIGNAL 也無 ATEXIT。
+static int g_diagFd = -1;
+static std::atomic<bool> g_hbStop{false};
+
+static void paxidxCrashHandler(int sig, siginfo_t *info, void *) {
+    int fd = g_diagFd;
+    if (fd < 0) {
+        std::string p = paxidxDocumentsDir() + "/paxidx-swift-debug.log";
+        fd = open(p.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
+    if (fd >= 0) {
+        char buf[160];
+        int n = snprintf(buf, sizeof(buf), "!!! SIGNAL %d fault_addr=%p\n",
+                         sig, info ? info->si_addr : nullptr);
+        if (n > 0) (void)!write(fd, buf, (size_t)n);
+        void *frames[64];
+        int count = backtrace(frames, 64);
+        if (count > 0) backtrace_symbols_fd(frames, count, fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void paxidxAtExit() {
+    paxidxDebugNote("!!! ATEXIT (exit() was called)");
+}
+
+static uint64_t paxidxFootprintBytes() {
+    task_vm_info_data_t info;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info,
+                  &count) != KERN_SUCCESS)
+        return 0;
+    return (uint64_t)info.phys_footprint;
+}
+
+static std::string paxidxListDir(const std::string &path, int maxEntries) {
+    DIR *d = opendir(path.c_str());
+    if (!d) return "(cannot open)";
+    std::string out;
+    int n = 0;
+    while (auto *e = readdir(d)) {
+        if (e->d_name[0] == '.') continue;
+        if (n >= maxEntries) { out += ", ..."; break; }
+        if (n) out += ", ";
+        out += e->d_name;
+        n++;
+    }
+    closedir(d);
+    return out.empty() ? "(empty)" : out;
 }
 
 namespace swift {
@@ -262,6 +325,10 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                     std::to_string((int)getpid()) + " argc=" +
                     std::to_string(argc) + " argv: " +
                     paxidxJoinArgs(argc, argv));
+    if (g_diagFd < 0) {
+        std::string p = paxidxDocumentsDir() + "/paxidx-swift-debug.log";
+        g_diagFd = open(p.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
     const char *target = argValue(argc, argv, "-target");
     const char *sdk = argValue(argc, argv, "-sdk");
     const char *output = argValue(argc, argv, "-o");
@@ -331,10 +398,40 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
         }
         paxidxDebugNote("M2 frontend args: " + joined);
     }
+    if (sdk) {
+        std::string sdkStr = sdk;
+        paxidxDebugNote("STAT sdk/usr/lib/swift: " +
+                        paxidxListDir(sdkStr + "/usr/lib/swift", 24));
+        paxidxDebugNote("STAT sdk/usr/lib/clang: " +
+                        paxidxListDir(sdkStr + "/usr/lib/clang", 8));
+    }
+    paxidxDebugNote("STAT Documents/Toolchain: " +
+                    paxidxListDir(paxidxDocumentsDir() + "/Toolchain", 16));
+    paxidxDebugNote("STAT footprint at entry MB=" +
+                    std::to_string(paxidxFootprintBytes() / (1024 * 1024)));
     initSwiftModulesOnce();
     llvm::remove_fatal_error_handler();
     int result;
     std::string captured;
+    {
+        struct sigaction sa {};
+        sa.sa_sigaction = paxidxCrashHandler;
+        sa.sa_flags = SA_SIGINFO;
+        sigemptyset(&sa.sa_mask);
+        for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE})
+            sigaction(sig, &sa, nullptr);
+        atexit(paxidxAtExit);
+        g_hbStop = false;
+        std::thread([] {
+            while (!g_hbStop.load()) {
+                paxidxDebugNote("HB footprint MB=" +
+                                std::to_string(paxidxFootprintBytes() /
+                                               (1024 * 1024)));
+                usleep(250000);
+            }
+        }).detach();
+        paxidxDebugNote("M3b signal handlers + heartbeat armed");
+    }
     {
         NSString *docsDir = [NSString stringWithUTF8String:paxidxDocumentsDir().c_str()];
         StderrCapture cap(docsDir);
@@ -344,6 +441,7 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
             "swift-frontend", nullptr, nullptr);
         captured = cap.finish();
     }
+    g_hbStop = true;
     llvm::install_fatal_error_handler(paxidxLLVMFatalHandler);
     paxidxDebugNote("M4 performFrontend returned rc=" + std::to_string(result) +
                     " captured_bytes=" + std::to_string(captured.size()));
