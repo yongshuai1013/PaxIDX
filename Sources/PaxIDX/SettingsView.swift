@@ -107,11 +107,11 @@ struct SettingsView: View {
                         Text(swiftModulesOverlaid ? "已疊加（6.2.4）" : "未疊加")
                             .foregroundColor(swiftModulesOverlaid ? .green : .orange)
                     }
-                    if !swiftModulesOverlaid && !isOverlayingModules {
-                        Button("疊加 Swift 標準庫模塊") {
+                    if !isOverlayingModules {
+                        Button(swiftModulesOverlaid ? "重新疊加 Swift 標準庫模塊" : "疊加 Swift 標準庫模塊") {
                             overlaySwiftModules()
                         }
-                        Text("SDK 底包的標準庫接口是 Apple Swift 6.1.2 的，我們的前端（6.2.4）拒讀；疊加會把工具鏈自己生成的 6.2.4 接口覆蓋進 SDK，只需做一次")
+                        Text("SDK 底包的標準庫接口是 Apple Swift 6.1.2 的，我們的前端（6.2.4）拒讀；疊加會把工具鏈的 6.2.4 接口合併覆蓋進 SDK，模塊包更新後可直接重新疊加，不必先刪除")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

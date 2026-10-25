@@ -123,12 +123,19 @@ final class ToolchainManager {
         }
     }
 
-    /// Swift 標準庫模塊是否已疊加到 SDK（6.2.4 接口就位）
+    /// Swift 標準庫模塊是否已完整疊加到 SDK（6.2.4 接口就位）
+    /// Swift 與 _Concurrency 都要查：2026-10-26 的殘包只有 Swift／SwiftOnoneSupport，
+    /// 缺 _Concurrency 時前端退回 SDK 的 6.1.2 接口被拒讀——只查 Swift 會把殘包
+    /// 誤報成「已疊加」，還會連累設定頁把疊加按鈕藏起來沒法補疊。
     var isSwiftModulesOverlaid: Bool {
         guard let sdk = SDKManager.shared.sdkPath else { return false }
-        let iface = sdk.appendingPathComponent("usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface")
-        guard let text = try? String(contentsOf: iface, encoding: .utf8) else { return false }
-        return text.contains("swiftlang-6.2.4") || text.contains("Swift version 6.2.4")
+        for module in ["Swift", "_Concurrency"] {
+            let iface = sdk.appendingPathComponent("usr/lib/swift/\(module).swiftmodule/arm64-apple-ios.swiftinterface")
+            guard let text = try? String(contentsOf: iface, encoding: .utf8),
+                  text.contains("swiftlang-6.2.4") || text.contains("Swift version 6.2.4")
+            else { return false }
+        }
+        return true
     }
 
     /// 下載工具鏈的 Swift 標準庫模塊包，疊加（覆蓋）到 SDK 的 usr/lib/swift
