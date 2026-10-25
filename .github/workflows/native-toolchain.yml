@@ -1033,11 +1033,19 @@ jobs:
                 fi
               done
             fi
+            # 二分模式（2026-10-26 真機：全套接口包仍無聲閃退）：FILL_ONLY 非空時
+            # 只補名單上的模塊，其餘保持 SDK 原樣，讓真機編譯逐個定罪。
+            # 本輪名單：只有 _Concurrency。判讀：還死＝_Concurrency 本人；
+            # 改為優雅報 _StringProcessing 版本錯誤＝_Concurrency 過關、兇手在其後。
+            FILL_ONLY="_Concurrency.swiftmodule"
             if [ -n "${PICK_DIR}" ]; then
-              echo "fill source: ${PICK_SRC}: ${PICK_DIR}"
+              echo "fill source: ${PICK_SRC}: ${PICK_DIR} (FILL_ONLY=${FILL_ONLY})"
               for d in "${PICK_DIR}"/*.swiftmodule; do
                 [ -e "$d" ] || continue
                 name="$(basename "$d")"
+                if [ -n "${FILL_ONLY}" ] && [ "${name}" != "${FILL_ONLY}" ]; then
+                  continue
+                fi
                 if [ ! -d "dist/swift-stdlib-ios/${name}" ]; then
                   echo "fill module: ${name} from ${PICK_SRC}"
                   cp -R -L "$d" "dist/swift-stdlib-ios/${name}"
