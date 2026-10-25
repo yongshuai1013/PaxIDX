@@ -999,7 +999,30 @@ jobs:
               echo "找到 Swift 模塊目錄: $parent"
               cp -R -L "$parent/." dist/swift-stdlib-ios/
             done
-            ls -R dist/swift-stdlib-ios | head -30
+            # 補齊本機構建沒生成的 stdlib 模塊（_Concurrency／_StringProcessing／
+            # _FoundationCollections 在 iphoneos host-variant 配置下無 ninja 目標，
+            # 2026-10-26 真機實證：缺了它們，前端只能退回 SDK 自帶的 Apple 6.1.2
+            # 接口、被版本檢查拒讀）。官方 swift.org 6.2.4 主機工具鏈與本前端同一個
+            # tag 構建、自帶 iphoneos 全套模塊——缺哪個從它那裡補哪個，已有的
+            # （自家生成的 Swift／SwiftOnoneSupport）不覆蓋。
+            HOST_IPHONEOS_SWIFT="$HOST_SWIFT_624_BIN/../lib/swift/iphoneos"
+            if [ -d "$HOST_IPHONEOS_SWIFT" ]; then
+              for d in "$HOST_IPHONEOS_SWIFT"/*.swiftmodule; do
+                [ -d "$d" ] || continue
+                name="$(basename "$d")"
+                if [ ! -d "dist/swift-stdlib-ios/$name" ]; then
+                  echo "補齊模塊: $name（官方 6.2.4 主機工具鏈）"
+                  cp -R -L "$d" "dist/swift-stdlib-ios/$name"
+                fi
+              done
+            else
+              echo "::warning::主機工具鏈 iphoneos 模塊目錄不存在: $HOST_IPHONEOS_SWIFT"
+            fi
+            if [ ! -d "dist/swift-stdlib-ios/_Concurrency.swiftmodule" ]; then
+              echo "::error::補齊後仍缺 _Concurrency.swiftmodule，模塊包不完整"
+              exit 1
+            fi
+            ls -R dist/swift-stdlib-ios | head -60
             if [ ! -d "dist/swift-stdlib-ios/Swift.swiftmodule" ]; then
               echo "::error::沒找到 6.2.4 生成的 Swift.swiftmodule，stdlib 模塊目標沒生效"
               exit 1
