@@ -1005,10 +1005,17 @@ jobs:
             # 接口、被版本檢查拒讀）。官方 swift.org 6.2.4 主機工具鏈與本前端同一個
             # tag 構建、自帶 iphoneos 全套模塊——缺哪個從它那裡補哪個，已有的
             # （自家生成的 Swift／SwiftOnoneSupport）不覆蓋。
-            HOST_IPHONEOS_SWIFT="$HOST_SWIFT_624_BIN/../lib/swift/iphoneos"
-            if [ -d "$HOST_IPHONEOS_SWIFT" ]; then
+            # run #38 教訓：官方 pkg 解出後 usr/lib/swift/iphoneos 下沒有
+            # *.swiftmodule（路徑假設錯誤）——改為全樹搜尋 _Concurrency.swiftmodule
+            # 所在目錄，不再假設固定路徑；搜尋結果完整打印進日誌留證。
+            echo "=== 主機工具鏈內的 swiftmodule 目錄 ==="
+            find host-swift-toolchain -name '*.swiftmodule' 2>/dev/null | head -40 || true
+            HOST_CONCURRENCY="$(find host-swift-toolchain -name '_Concurrency.swiftmodule' -print -quit 2>/dev/null || true)"
+            if [ -n "$HOST_CONCURRENCY" ]; then
+              HOST_IPHONEOS_SWIFT="$(dirname "$HOST_CONCURRENCY")"
+              echo "主機工具鏈 iphoneos 模塊目錄: $HOST_IPHONEOS_SWIFT"
               for d in "$HOST_IPHONEOS_SWIFT"/*.swiftmodule; do
-                [ -d "$d" ] || continue
+                [ -e "$d" ] || continue
                 name="$(basename "$d")"
                 if [ ! -d "dist/swift-stdlib-ios/$name" ]; then
                   echo "補齊模塊: $name（官方 6.2.4 主機工具鏈）"
@@ -1016,7 +1023,7 @@ jobs:
                 fi
               done
             else
-              echo "::warning::主機工具鏈 iphoneos 模塊目錄不存在: $HOST_IPHONEOS_SWIFT"
+              echo "::warning::主機工具鏈全樹都沒有 _Concurrency.swiftmodule"
             fi
             if [ ! -d "dist/swift-stdlib-ios/_Concurrency.swiftmodule" ]; then
               echo "::error::補齊後仍缺 _Concurrency.swiftmodule，模塊包不完整"
