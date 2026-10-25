@@ -1005,25 +1005,46 @@ jobs:
             # 接口、被版本檢查拒讀）。官方 swift.org 6.2.4 主機工具鏈與本前端同一個
             # tag 構建、自帶 iphoneos 全套模塊——缺哪個從它那裡補哪個，已有的
             # （自家生成的 Swift／SwiftOnoneSupport）不覆蓋。
-            # run #38 教訓：官方 pkg 解出後 usr/lib/swift/iphoneos 下沒有
-            # *.swiftmodule（路徑假設錯誤）——改為全樹搜尋 _Concurrency.swiftmodule
-            # 所在目錄，不再假設固定路徑；搜尋結果完整打印進日誌留證。
-            echo "=== 主機工具鏈內的 swiftmodule 目錄 ==="
-            find host-swift-toolchain -name '*.swiftmodule' 2>/dev/null | head -40 || true
-            HOST_CONCURRENCY="$(find host-swift-toolchain -name '_Concurrency.swiftmodule' -print -quit 2>/dev/null || true)"
-            if [ -n "$HOST_CONCURRENCY" ]; then
-              HOST_IPHONEOS_SWIFT="$(dirname "$HOST_CONCURRENCY")"
-              echo "主機工具鏈 iphoneos 模塊目錄: $HOST_IPHONEOS_SWIFT"
-              for d in "$HOST_IPHONEOS_SWIFT"/*.swiftmodule; do
+            # 補齊缺失模塊（run #38／#39 教訓：(1) 固定路徑假設錯 (2) 全樹搜尋先
+            # 撞到 swift_static/embedded 變體，不是 iphoneos 的 (3) macOS bash 3.2
+            # 下 $name 緊貼中文括號會被誤解析成亂碼變量名——變量一律加 ${}）。
+            # 這輪把候選來源一次盤清：先官方 pkg 的 usr/lib/swift/iphoneos，
+            # 再 runner 上各 Xcode 的 iPhoneOS SDK（接口須為 6.2 世代）；
+            # 兩處都沒有就紅燈停下，不再猜第三個來源。
+            echo "=== 候選來源盤點 ==="
+            ls /Applications | grep -i xcode || true
+            PKG_SWIFT_DIR="${HOST_SWIFT_624_BIN}/../lib/swift"
+            echo "--- 官方工具鏈 lib/swift 平台目錄 ---"
+            ls "${PKG_SWIFT_DIR}" || true
+            echo "--- 官方工具鏈 lib/swift/iphoneos ---"
+            ls "${PKG_SWIFT_DIR}/iphoneos" || echo "(no iphoneos dir)"
+            PICK_DIR=""
+            PICK_SRC=""
+            if [ -d "${PKG_SWIFT_DIR}/iphoneos/_Concurrency.swiftmodule" ]; then
+              PICK_DIR="${PKG_SWIFT_DIR}/iphoneos"
+              PICK_SRC="official-6.2.4-host-toolchain"
+            else
+              for sdk in /Applications/Xcode*.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS*.sdk; do
+                [ -d "${sdk}/usr/lib/swift/_Concurrency.swiftmodule" ] || continue
+                if head -10 "${sdk}/usr/lib/swift/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface" 2>/dev/null | grep -q 'Swift version 6\.2'; then
+                  PICK_DIR="${sdk}/usr/lib/swift"
+                  PICK_SRC="runner-Xcode-SDK-6.2"
+                  break
+                fi
+              done
+            fi
+            if [ -n "${PICK_DIR}" ]; then
+              echo "fill source: ${PICK_SRC}: ${PICK_DIR}"
+              for d in "${PICK_DIR}"/*.swiftmodule; do
                 [ -e "$d" ] || continue
                 name="$(basename "$d")"
-                if [ ! -d "dist/swift-stdlib-ios/$name" ]; then
-                  echo "補齊模塊: $name（官方 6.2.4 主機工具鏈）"
-                  cp -R -L "$d" "dist/swift-stdlib-ios/$name"
+                if [ ! -d "dist/swift-stdlib-ios/${name}" ]; then
+                  echo "fill module: ${name} from ${PICK_SRC}"
+                  cp -R -L "$d" "dist/swift-stdlib-ios/${name}"
                 fi
               done
             else
-              echo "::warning::主機工具鏈全樹都沒有 _Concurrency.swiftmodule"
+              echo "::warning::no 6.2-gen iphoneos _Concurrency module in either candidate source"
             fi
             if [ ! -d "dist/swift-stdlib-ios/_Concurrency.swiftmodule" ]; then
               echo "::error::補齊後仍缺 _Concurrency.swiftmodule，模塊包不完整"
