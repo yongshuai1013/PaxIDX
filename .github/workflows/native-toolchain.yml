@@ -1043,6 +1043,23 @@ jobs:
                   cp -R -L "$d" "dist/swift-stdlib-ios/${name}"
                 fi
               done
+              # 補入的模塊只留文本接口，刪掉二進制 .swiftmodule 文件：真機實證
+              # （2026-10-26 03:33）前端載入官方二進制模塊時在 performFrontend 內
+              # 無聲死亡——無 SIGNAL／ATEXIT 標記、心跳 footprint 死前快速爬升，
+              # 符合反序列化失控分配被 jetsam SIGKILL 的特徵。SDK 本來就只發
+              # .swiftinterface，文本接口是標準消費路徑；自家生成的 Swift／
+              # SwiftOnoneSupport 二進制已驗證可用，不動。
+              for d in dist/swift-stdlib-ios/*.swiftmodule; do
+                [ -d "$d" ] || continue
+                case "$(basename "$d")" in
+                  Swift.swiftmodule|SwiftOnoneSupport.swiftmodule) continue ;;
+                esac
+                n="$(find "$d" -type f -name '*.swiftmodule' | wc -l | tr -d ' ')"
+                if [ "${n}" != "0" ]; then
+                  echo "strip binary modules in $(basename "$d"): ${n} files"
+                  find "$d" -type f -name '*.swiftmodule' -delete
+                fi
+              done
             else
               echo "::warning::no 6.2-gen iphoneos _Concurrency module in either candidate source"
             fi
