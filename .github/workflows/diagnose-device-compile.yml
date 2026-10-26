@@ -3,12 +3,15 @@
 #
 # 背景（2026-10-26）：裝置端編 print("Hello") 必崩，符号化定案崩在子編譯
 # 實例從 .swiftinterface 現場建模塊的 SILGen。_Concurrency 補上自編 ios15
-# 二進制後真機仍同點崩（pid 626/631，永帥確認是重新疊加後編的）——兇手
-# 另有其模塊。SDK 本體是 iOS 18.5 SDK 的 6.1.2 接口集（全無二進制），
-# 疊加只換了 Swift／SwiftOnoneSupport／_Concurrency 三個；Swift 模塊的
-# 其餘依賴（如 _StringProcessing）仍是接口，嫌疑最大。本 workflow 把
-# 裝置的 SDK 組裝原樣搬到 Mac、用主機 6.2.4 前端按裝置 M2 參數編同一句
-# 代碼，看模塊緩存裡冒出哪些現場建產物、以及會不會同點崩。
+# 二進制後真機仍同點崩（pid 626/631）——兇手另有其模塊。
+# 首輪復現（run #2）實證：主機前端用裝置參數編同一句代碼，模塊緩存裡冒出
+# _Concurrency／_StringProcessing／SwiftOnoneSupport 三個現場建產物——
+# 前兩個明明有二進制在 SDK 裡。Swift 本人沒被重建。本輪三個對照實驗：
+# E1 基線（合法 library 源文件、裝置參數、乾淨緩存）；
+# E2 把 _Concurrency／SwiftOnoneSupport 目錄裡的 .swiftinterface 刪光
+#    （只剩二進制）再編，看還重不重建；
+# E5 整個拿掉 _StringProcessing.swiftmodule 再編，看另外兩個還重不重建
+#    （驗「某個模塊觸發整圖 explicit build」假說）。
 name: diagnose-device-compile
 
 on:
@@ -68,32 +71,49 @@ jobs:
           # 模塊疊加：照 App 的 overlayCopy（swift-stdlib-ios 內容合併進 usr/lib/swift）
           mkdir -p /tmp/mods && unzip -q dl/swift-toolchain-modules.zip -d /tmp/mods
           cp -R /tmp/mods/swift-stdlib-ios/. "$SDKROOT/usr/lib/swift/"
-          echo "--- post-overlay _Concurrency dir:"
-          ls -la "$SDKROOT/usr/lib/swift/_Concurrency.swiftmodule/"
-          echo "--- SDK _StringProcessing interface head:"
-          head -3 "$SDKROOT/usr/lib/swift/_StringProcessing.swiftmodule/arm64-apple-ios.swiftinterface"
+          echo "=== E0 merged module dirs (post-overlay):"
+          for m in Swift SwiftOnoneSupport _Concurrency _StringProcessing; do
+            echo "--- $m.swiftmodule:"
+            ls "$SDKROOT/usr/lib/swift/$m.swiftmodule/" || true
+          done
 
-      - name: Compile print("Hello") with the device's argument set
+      - name: Run the three compile experiments
         shell: bash
         run: |
           set -uxo pipefail
-          printf 'print("Hello")\n' > /tmp/newfile.swift
-          rm -rf /tmp/devcache
-          mkdir -p /tmp/devcache
-          FE=0
-          "$HOST_FRONTEND" -frontend -c /tmp/newfile.swift \
-            -module-cache-path /tmp/devcache \
-            -Xcc -fmodules-cache-path=/tmp/devcache \
-            -target arm64-apple-ios15.0 \
-            -sdk "$SDKROOT" \
-            -resource-dir "$SDKROOT/usr/lib/swift" \
-            -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
-            -enable-objc-interop -parse-as-library -emit-object \
-            -o /tmp/newfile.o > /tmp/compile-out.txt 2>&1 || FE=$?
-          echo "frontend exit code: $FE"
-          echo "--- last 40 lines of output:"
-          tail -40 /tmp/compile-out.txt
-          echo "--- module cache contents (built-from-interface products land here):"
-          find /tmp/devcache -maxdepth 2 | sort
-          echo "--- object file:"
-          ls -la /tmp/newfile.o || echo "no object produced"
+          # 合法 library 源文件（避開 -parse-as-library 對頂層代碼的報錯，干擾判讀）
+          printf 'public func hello() { print("Hello") }\n' > /tmp/probe.swift
+          run_compile() {
+            local sdk="$1" cache="$2" tag="$3"
+            rm -rf "$cache" && mkdir -p "$cache"
+            local fe=0
+            "$HOST_FRONTEND" -frontend -c /tmp/probe.swift \
+              -module-cache-path "$cache" \
+              -Xcc -fmodules-cache-path="$cache" \
+              -target arm64-apple-ios15.0 \
+              -sdk "$sdk" \
+              -resource-dir "$sdk/usr/lib/swift" \
+              -Xcc -resource-dir -Xcc "$sdk/usr/lib/clang/19.1.5" \
+              -enable-objc-interop -parse-as-library -emit-object \
+              -o /tmp/probe-$tag.o > /tmp/out-$tag.txt 2>&1 || fe=$?
+            echo "=== $tag exit=$fe"
+            grep -m3 'error:' /tmp/out-$tag.txt || echo "(no errors in output)"
+            echo "--- $tag swift modules built into cache:"
+            ls "$cache" | grep '\.swiftmodule$' || echo "(none)"
+            ls -la /tmp/probe-$tag.o > /dev/null 2>&1 && echo "--- $tag object produced" || echo "--- $tag NO object"
+          }
+          # E1 基線
+          run_compile "$SDKROOT" /tmp/cache-e1 E1
+          # E2 二進制專屬：刪掉兩個模塊目錄裡的接口
+          cp -R "$SDKROOT" /tmp/sdk-e2
+          rm -f /tmp/sdk-e2/usr/lib/swift/_Concurrency.swiftmodule/*.swiftinterface \
+                /tmp/sdk-e2/usr/lib/swift/_Concurrency.swiftmodule/*.private.swiftinterface \
+                /tmp/sdk-e2/usr/lib/swift/SwiftOnoneSupport.swiftmodule/*.swiftinterface \
+                /tmp/sdk-e2/usr/lib/swift/SwiftOnoneSupport.swiftmodule/*.private.swiftinterface
+          echo "--- E2 _Concurrency dir now:"; ls /tmp/sdk-e2/usr/lib/swift/_Concurrency.swiftmodule/
+          echo "--- E2 SwiftOnoneSupport dir now:"; ls /tmp/sdk-e2/usr/lib/swift/SwiftOnoneSupport.swiftmodule/
+          run_compile /tmp/sdk-e2 /tmp/cache-e2 E2
+          # E5 拿掉 _StringProcessing
+          cp -R "$SDKROOT" /tmp/sdk-e5
+          rm -rf /tmp/sdk-e5/usr/lib/swift/_StringProcessing.swiftmodule
+          run_compile /tmp/sdk-e5 /tmp/cache-e5 E5
