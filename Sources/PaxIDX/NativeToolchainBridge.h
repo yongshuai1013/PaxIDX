@@ -35,6 +35,10 @@ int paxidx_ld_link(int argc, const char * const *argv,
 /// 0=載入成功、1=載入失敗、2=未內嵌
 int paxidx_nyx_dlopen_test(char *buffer, size_t capacity);
 
+/// Nyxian CoreCompiler 試編（實驗）：用 CoreCompiler 的 CCDriver C API
+/// 把一個內建範例 C 檔編成 .o，報告寫入 buffer；0=編出產物、1=失敗、2=未內嵌
+int paxidx_nyx_compile_test(char *buffer, size_t capacity);
+
 /// 編譯 Swift 源文件到 .o，0=成功（僅 Swift 版 dylib 有）
 /// argv 形如：["swiftc", "-target", <triple>, "-sdk", <sdk>, "-o", <obj>, <src.swift>]
 /// diagnostics 收編譯器診斷文字（可為 NULL）

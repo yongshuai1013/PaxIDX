@@ -9,6 +9,8 @@ import SwiftUI
 struct NyxLoadTestView: View {
     @State private var report = "尚未執行"
     @State private var running = false
+    @State private var compileReport = "尚未執行"
+    @State private var compiling = false
 
     var body: some View {
         List {
@@ -31,8 +33,41 @@ struct NyxLoadTestView: View {
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
             }
+            Section {
+                if !compiling {
+                    Button("用 CoreCompiler 試編一個 C 檔") {
+                        runCompile()
+                    }
+                } else {
+                    Text("編譯中…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Text("走 CoreCompiler 的 CCDriver C API（介面照 Nyxian 開源源碼）：把範例 C 檔（#include <stdio.h> 的 main）以 App 內已下載的 SDK 編成 test.o，回報診斷原文與產物是否生成。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Section(header: Text("試編結果")) {
+                Text(compileReport)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+            }
         }
         .navigationTitle("Nyxian 載入實測")
+    }
+
+    private func runCompile() {
+        compiling = true
+        compileReport = "執行中…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var buf = [CChar](repeating: 0, count: 32768)
+            let rc = paxidx_nyx_compile_test(&buf, buf.count)
+            let text = String(cString: buf)
+            DispatchQueue.main.async {
+                compiling = false
+                compileReport = "rc=\(rc)\n\(text)"
+            }
+        }
     }
 
     private func runTest() {

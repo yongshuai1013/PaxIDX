@@ -256,3 +256,122 @@ extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
     copyDiag(report.c_str(), buffer, capacity);
     return 0;
 }
+
+// Nyxian CoreCompiler 試編（實驗，2026-10-27）：介面照 emexlab/Nyxian
+// 開源源碼（Frameworks/CoreCompiler 的 CCJob.h／CCDriver.h／
+// CCDiagnostic.h 與 MobileDevelopmentKit 的 MDKJob.m 用法）：
+// dlopen 後以 dlsym（Darwin 不帶底線）取 C API，建 clang driver
+// （引數比照一般 clang 命令行），由 driver 產 job 後逐個執行，
+// 診斷以 CCDiagnostic 存取器讀出。範例 C 檔寫入 App 暫存目錄，
+// SDK 用 App 已下載的那份（Documents/SDK/iPhoneOS.sdk）。
+typedef struct __CCJob *CCJobRef2;
+typedef struct __CCDriver *CCDriverRef2;
+typedef struct __CCDiagnostic *CCDiagnosticRef2;
+typedef CCDriverRef2 (*CCDriverCreateFn)(CFAllocatorRef, CFArrayRef, uint8_t);
+typedef CFArrayRef (*CCDriverCreateJobsFn)(CFAllocatorRef, CCDriverRef2);
+typedef Boolean (*CCJobExecuteJobFn)(CCJobRef2, CFArrayRef *, CFStringRef *);
+typedef uint8_t (*CCDiagnosticGetLevelFn)(CCDiagnosticRef2);
+typedef CFStringRef (*CCDiagnosticGetMessageFn)(CCDiagnosticRef2);
+typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
+
+extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
+    std::string report;
+    auto line = [&](const std::string &t) { report += t; report += "\n"; };
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
+        stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/CoreCompiler"];
+    if (![fm fileExistsAtPath:fwPath]) {
+        line("未內嵌 CoreCompiler.framework（這不是 nyx_test 實驗包）");
+        copyDiag(report.c_str(), buffer, capacity);
+        return 2;
+    }
+    void *h = dlopen(fwPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) {
+        const char *e = dlerror();
+        line(std::string("dlopen 失敗：") + (e ? e : "(無錯誤文字)"));
+        copyDiag(report.c_str(), buffer, capacity);
+        return 1;
+    }
+    auto sym = [&](const char *name) -> void * {
+        void *p = dlsym(h, name);
+        if (!p) line(std::string("缺符號：") + name);
+        return p;
+    };
+    auto pDriverCreate = (CCDriverCreateFn)sym("CCDriverCreate");
+    auto pDriverJobs = (CCDriverCreateJobsFn)sym("CCDriverCreateJobs");
+    auto pJobExecute = (CCJobExecuteJobFn)sym("CCJobExecuteJob");
+    auto pDiagLevel = (CCDiagnosticGetLevelFn)sym("CCDiagnosticGetLevel");
+    auto pDiagMessage = (CCDiagnosticGetMessageFn)sym("CCDiagnosticGetMessage");
+    auto pJobOutput = (CCJobGetOutputFileURLFn)sym("CCJobGetOutputFileURL");
+    if (!pDriverCreate || !pDriverJobs || !pJobExecute) {
+        copyDiag(report.c_str(), buffer, capacity);
+        return 1;
+    }
+    NSString *sdk = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/SDK/iPhoneOS.sdk"];
+    if (![fm fileExistsAtPath:sdk]) {
+        line("SDK 未安裝（Documents/SDK/iPhoneOS.sdk 不存在），先到設定頁下載 SDK");
+        copyDiag(report.c_str(), buffer, capacity);
+        return 1;
+    }
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"nyxtest"];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *src = [dir stringByAppendingPathComponent:@"test.c"];
+    NSString *obj = [dir stringByAppendingPathComponent:@"test.o"];
+    [fm removeItemAtPath:obj error:nil];
+    NSString *code = @"#include <stdio.h>\nint main(void) { printf(\"nyx ok\\n\"); return 42; }\n";
+    [code writeToFile:src atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    line("源文件：" + std::string(src.UTF8String));
+    line("SDK：" + std::string(sdk.UTF8String));
+    NSArray *args = @[@"-target", @"arm64-apple-ios15.0", @"-isysroot", sdk,
+                      @"-c", src, @"-o", obj];
+    CCDriverRef2 driver = pDriverCreate(kCFAllocatorSystemDefault,
+                                         (__bridge CFArrayRef)args, 0);
+    if (!driver) {
+        line("CCDriverCreate 回傳空（driver 建立失敗）");
+        copyDiag(report.c_str(), buffer, capacity);
+        return 1;
+    }
+    line("driver 建立成功");
+    CFArrayRef jobs = pDriverJobs(kCFAllocatorSystemDefault, driver);
+    CFIndex njobs = jobs ? CFArrayGetCount(jobs) : 0;
+    line("driver 產出 job 數：" + std::to_string((long)njobs));
+    static const char *kLevelNames[] = {"note", "remark", "warning", "error", "fatal", "unknown"};
+    bool ok = false;
+    for (CFIndex i = 0; i < njobs; i++) {
+        CCJobRef2 job = (CCJobRef2)CFArrayGetValueAtIndex(jobs, i);
+        if (pJobOutput) {
+            CFURLRef out = pJobOutput(job);
+            if (out) {
+                line("job 輸出：" + std::string([(__bridge NSURL *)out path].UTF8String ?: ""));
+            }
+        }
+        CFArrayRef diags = NULL;
+        CFStringRef mainSrc = NULL;
+        Boolean success = pJobExecute(job, &diags, &mainSrc);
+        line(std::string("job ") + std::to_string((long)i) + " 執行結果：" + (success ? "成功" : "失敗"));
+        if (diags && pDiagLevel && pDiagMessage) {
+            CFIndex nd = CFArrayGetCount(diags);
+            for (CFIndex d = 0; d < nd; d++) {
+                CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
+                uint8_t lv = pDiagLevel(dg);
+                CFStringRef msg = pDiagMessage(dg);
+                std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
+                line(std::string("  diag[") + kLevelNames[lv <= 5 ? lv : 5] + "] " + m);
+            }
+        }
+        if (diags) CFRelease(diags);
+        if (mainSrc) CFRelease(mainSrc);
+        ok = ok || success;
+    }
+    if (jobs) CFRelease(jobs);
+    CFRelease(driver);
+    if ([fm fileExistsAtPath:obj]) {
+        unsigned long long sz = [[fm attributesOfItemAtPath:obj error:nil] fileSize];
+        line("產物 test.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+        ok = true;
+    } else {
+        line("產物 test.o 不存在");
+    }
+    copyDiag(report.c_str(), buffer, capacity);
+    return ok ? 0 : 1;
+}
