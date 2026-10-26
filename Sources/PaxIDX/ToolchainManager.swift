@@ -184,6 +184,67 @@ final class ToolchainManager {
         }
     }
 
+    /// Clang 內建頭文件是否已疊加到 SDK（usr/lib/clang/<版本>/include/stdarg.h 在位）
+    /// 缺了它橋接層不會給前端傳 Clang resource dir：ClangImporter 現場建
+    /// Darwin／C 模塊時缺內建頭會降級，反序列化 .swiftinterface 函數體時
+    /// 引用的型別載入不全，SILGen 會走到空 type 崩潰（2026-10-26 符號化定案）。
+    var isClangHeadersOverlaid: Bool {
+        guard let sdk = SDKManager.shared.sdkPath else { return false }
+        let clangDir = sdk.appendingPathComponent("usr/lib/clang", isDirectory: true)
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: clangDir.path) else { return false }
+        return versions.contains {
+            FileManager.default.fileExists(atPath: clangDir.appendingPathComponent("\($0)/include/stdarg.h").path)
+        }
+    }
+
+    /// 下載 Clang 內建頭文件包，疊加到 SDK 的 usr/lib/clang
+    /// CI 自 #37 起就發佈 clang-resource-headers.zip（註釋寫明「App 疊加到
+    /// SDK 的 usr/lib/clang/<版本>/」），但 App 一直沒寫下載它的代碼，
+    /// 每份真機 log 的 usr/lib/clang 都是空的。
+    /// zip 內結構：clang-headers/<版本目錄>/<文件>，版本目錄原樣搬過去，
+    /// 橋接層掃目錄認版本、不寫死版號。
+    func downloadClangHeaders(
+        onProgress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urlString = "https://github.com/yongshuai1013/PaxIDX/releases/download/\(swiftReleaseTag)/clang-resource-headers.zip"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Clang 頭文件下載地址無效"])))
+            return
+        }
+        guard let sdk = SDKManager.shared.sdkPath else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "請先下載 SDK，再疊加 Clang 頭文件"])))
+            return
+        }
+        downloadFile(from: url, tempName: "clang-headers.zip", onProgress: onProgress) { result in
+            switch result {
+            case .success(let fileURL):
+                do {
+                    let stage = self.containerURL.appendingPathComponent("__clang_stage__", isDirectory: true)
+                    try? FileManager.default.removeItem(at: stage)
+                    try self.extract(zip: fileURL, to: stage)
+                    try? FileManager.default.removeItem(at: fileURL)
+                    // zip 內結構：clang-headers/<版本目錄>，內容覆蓋到 usr/lib/clang
+                    let srcDir = stage.appendingPathComponent("clang-headers", isDirectory: true)
+                    guard FileManager.default.fileExists(atPath: srcDir.path) else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "Clang 頭文件包結構不對：缺 clang-headers 目錄"])
+                    }
+                    let destDir = sdk.appendingPathComponent("usr/lib/clang", isDirectory: true)
+                    try self.overlayCopy(from: srcDir, to: destDir)
+                    try? FileManager.default.removeItem(at: stage)
+                    completion(.success(()))
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     /// 遞歸覆蓋複製（目錄合併、文件覆蓋）
     private func overlayCopy(from src: URL, to dest: URL) throws {
         let fm = FileManager.default

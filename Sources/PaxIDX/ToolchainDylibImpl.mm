@@ -363,12 +363,26 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     owned.push_back("-resource-dir"); owned.push_back(resourceDir);
     // Clang 內建頭（stdatomic.h 等）：performFrontend 繞過 driver，Clang 的 resource dir 要手動傳
     // 但目錄必須存在，否則 Clang 初始化失敗，連 print("Hello") 都掛
+    // 版本目錄名不寫死：資產 clang-resource-headers.zip 裡是 llvm-build 的
+    // lib/clang/<版號>（實測為 19），先前寫死 19.1.5 永遠探不到。
+    // 掃 usr/lib/clang/ 下第一個含 include/stdarg.h 的子目錄就用它。
     {
-        std::string clangResourceDir = std::string(sdk) + "/usr/lib/clang/19.1.5";
-        std::string probe = clangResourceDir + "/include/stdarg.h";
-        FILE *f = fopen(probe.c_str(), "r");
-        if (f) {
-            fclose(f);
+        std::string clangBase = std::string(sdk) + "/usr/lib/clang";
+        std::string clangResourceDir;
+        if (DIR *d = opendir(clangBase.c_str())) {
+            while (struct dirent *ent = readdir(d)) {
+                if (ent->d_name[0] == '.') continue;
+                std::string candidate = clangBase + "/" + ent->d_name;
+                FILE *f = fopen((candidate + "/include/stdarg.h").c_str(), "r");
+                if (f) {
+                    fclose(f);
+                    clangResourceDir = candidate;
+                    break;
+                }
+            }
+            closedir(d);
+        }
+        if (!clangResourceDir.empty()) {
             owned.push_back("-Xcc");
             owned.push_back("-resource-dir");
             owned.push_back("-Xcc");

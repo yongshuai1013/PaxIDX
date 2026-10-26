@@ -184,13 +184,32 @@ struct SettingsView: View {
         ToolchainManager.shared.downloadSwiftModules(
             onProgress: { _ in },
             completion: { result in
-                DispatchQueue.main.async {
-                    isOverlayingModules = false
-                    switch result {
-                    case .success:
-                        swiftModulesOverlaid = ToolchainManager.shared.isSwiftModulesOverlaid
-                        toolchainMessage = swiftModulesOverlaid ? "Swift 模塊疊加完成" : "疊加完成但驗證未過，請回報"
-                    case .failure(let error):
+                switch result {
+                case .success:
+                    // 模塊疊完接著疊 Clang 內建頭：同一次操作補齊，
+                    // 免得用戶再找第二個按鈕（頭文件缺位是 2026-10-26
+                    // 符號化定案的崩潰幫兇，見 ToolchainManager 註釋）
+                    DispatchQueue.main.async {
+                        toolchainMessage = "模塊完成，下載 Clang 頭文件中…"
+                    }
+                    ToolchainManager.shared.downloadClangHeaders(
+                        onProgress: { _ in },
+                        completion: { headerResult in
+                            DispatchQueue.main.async {
+                                isOverlayingModules = false
+                                swiftModulesOverlaid = ToolchainManager.shared.isSwiftModulesOverlaid
+                                switch headerResult {
+                                case .success:
+                                    toolchainMessage = swiftModulesOverlaid ? "Swift 模塊＋Clang 頭文件疊加完成" : "疊加完成但驗證未過，請回報"
+                                case .failure(let error):
+                                    toolchainMessage = "模塊疊加完成，但 Clang 頭文件失敗：\(error.localizedDescription)"
+                                }
+                            }
+                        }
+                    )
+                case .failure(let error):
+                    DispatchQueue.main.async {
+                        isOverlayingModules = false
                         toolchainMessage = "疊加失敗：\(error.localizedDescription)"
                     }
                 }
