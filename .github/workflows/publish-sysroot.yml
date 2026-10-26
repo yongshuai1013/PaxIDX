@@ -1,0 +1,38 @@
+name: publish-sysroot
+
+# 一次性：把 sysroot 包（真 dylib 副本）發佈到 sysroot-ios15 release。
+# 互動端憑證只能打 api.github.com、上傳資產要 uploads.github.com，
+# 故借 Actions 的 GITHUB_TOKEN 完成上傳；zip 本體經暫時連結下載。
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "sysroot zip 的下載連結"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Download zip and upload as release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ZIP_URL: ${{ inputs.url }}
+        run: |
+          set -e
+          curl -fL -o paxidx-sysroot-ios15.zip "$ZIP_URL"
+          ls -la paxidx-sysroot-ios15.zip
+          python3 -c "
+          import zipfile
+          z = zipfile.ZipFile('paxidx-sysroot-ios15.zip')
+          names = z.namelist()
+          assert 'usr/lib/libSystem.B.dylib' in names, names[:5]
+          assert 'usr/lib/swift/libswiftCore.dylib' in names
+          print('zip ok, entries:', len(names))
+          "
+          gh release upload sysroot-ios15 paxidx-sysroot-ios15.zip --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view sysroot-ios15 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size)"'
