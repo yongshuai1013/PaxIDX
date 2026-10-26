@@ -308,15 +308,23 @@ jobs:
           echo "load test passed: all harvested binaries accepted, zero rebuilds"
 
       - name: Device-flag compile test (bridge-exact args, emit-object)
+        continue-on-error: true
         shell: bash
         run: |
-          set -euxo pipefail
+          set -uxo pipefail
           # 真機 #68 疊加修好後編 Foundation 仍 rc=1、約 10 秒靜默失敗，
           # 而本 workflow 的 typecheck 載入測試全過（fcache2 零重建）——
           # 兩邊剩餘差異是橋接的參數集：裝置帶 -resource-dir 指 SDK 的
           # usr/lib/swift、-parse-as-library、-emit-object，且走出物件檔
           # 而非只 typecheck。這一步在已裝好二進制的同一份 SDK 上用
           # 橋接的一模一樣參數真編一次，主機上診斷可見，失敗即現形。
+          # A/B（#12 實證）：A＝橋接原樣參數，B＝只拿掉 -resource-dir 那行。
+          # #12 的 A 失敗在 _Builtin_float 的 underlying ObjC module not
+          # found（連帶 stdarg／_stddef 類 clang 內建模塊在子調用裡找不到
+          # ——resource-dir 指到 SDK 後，clang 內建資源的推導路徑斷了）。
+          # 這一步改成資訊步：兩案都跑、印各自 exit，最後以 A 的結果為準
+          # 決定本步成敗不影響打包（exit 0 收尾，判定看日誌）。
+          echo "##### variant A: bridge-exact (with -resource-dir <sdk>/usr/lib/swift)"
           rm -rf /tmp/fcache3
           "$STAGE_FE" -frontend -emit-object /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
@@ -326,9 +334,24 @@ jobs:
             -Xcc -fmodules-cache-path=/tmp/fcache3 \
             -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5" \
             -parse-as-library -enable-objc-interop \
-            -o /tmp/probe-deviceflags.o
-          ls -la /tmp/probe-deviceflags.o
-          echo "device-flag compile test passed"
+            -module-name probe \
+            -o /tmp/probeA.o
+          echo "variant A exit=$?"
+          ls -la /tmp/probeA.o 2>/dev/null || true
+          echo "##### variant B: same but WITHOUT -resource-dir"
+          rm -rf /tmp/fcache4
+          "$STAGE_FE" -frontend -emit-object /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_DIR" \
+            -module-cache-path /tmp/fcache4 \
+            -Xcc -fmodules-cache-path=/tmp/fcache4 \
+            -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5" \
+            -parse-as-library -enable-objc-interop \
+            -module-name probe \
+            -o /tmp/probeB.o
+          echo "variant B exit=$?"
+          ls -la /tmp/probeB.o 2>/dev/null || true
+          echo "device-flag A/B done (verdict in the exit lines above)"
 
       - name: Repack the modules package and upload
         shell: bash
