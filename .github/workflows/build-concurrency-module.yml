@@ -94,20 +94,28 @@ jobs:
           unzip -q /tmp/pkg-dl/swift-toolchain-modules.zip -d pkg
           ls pkg/swift-stdlib-ios
 
-      - name: Stage the resource dir (our ios15 Swift module shadows the official one)
+      - name: Stage a full toolchain copy (our ios15 Swift module shadows the official one)
         shell: bash
         run: |
           set -euxo pipefail
-          rm -rf stage-rd
-          cp -R "$HOST_TC_USR/lib/swift" stage-rd
+          # 整棵 usr 樹複製（lib/swift 與 lib/clang 保持同根兄弟關係）：
+          # 只抄 lib/swift 時，前端無論按執行檔相對路徑還是資源目錄推導
+          # Clang 資源目錄都會落空，內建頭缺失、Darwin 模塊建不起來
+          # （run #2／#3 實證，-Xcc -resource-dir 也救不回推導）。
+          # 改跑複製品自己的 swift-frontend，所有推導都落在複製樹內。
+          rm -rf stage-tc-usr
+          rsync -a "$HOST_TC_USR/" stage-tc-usr/
           # 用模塊包裡自家 ios15 的 Swift／SwiftOnoneSupport 蓋掉官方 ios16 版：
           # 新編的 _Concurrency 記錄的 Swift 依賴，必須跟裝置端實際載入的
           # 是同一份文件，否則裝置會因依賴標識不符拒載。
-          rm -rf stage-rd/iphoneos/Swift.swiftmodule stage-rd/iphoneos/SwiftOnoneSupport.swiftmodule
-          cp -R pkg/swift-stdlib-ios/Swift.swiftmodule stage-rd/iphoneos/
-          cp -R pkg/swift-stdlib-ios/SwiftOnoneSupport.swiftmodule stage-rd/iphoneos/
-          echo "STAGE_RD=$PWD/stage-rd" >> "$GITHUB_ENV"
-          ls stage-rd/iphoneos | head -20
+          rm -rf stage-tc-usr/lib/swift/iphoneos/Swift.swiftmodule stage-tc-usr/lib/swift/iphoneos/SwiftOnoneSupport.swiftmodule
+          cp -R pkg/swift-stdlib-ios/Swift.swiftmodule stage-tc-usr/lib/swift/iphoneos/
+          cp -R pkg/swift-stdlib-ios/SwiftOnoneSupport.swiftmodule stage-tc-usr/lib/swift/iphoneos/
+          echo "STAGE_RD=$PWD/stage-tc-usr/lib/swift" >> "$GITHUB_ENV"
+          echo "STAGE_FE=$PWD/stage-tc-usr/bin/swift-frontend" >> "$GITHUB_ENV"
+          test -x stage-tc-usr/bin/swift-frontend
+          ls stage-tc-usr/lib/swift/iphoneos | head -20
+          ls stage-tc-usr/lib/clang/
 
       - name: Expand the gyb sources
         shell: bash
@@ -129,13 +137,6 @@ jobs:
           set -euxo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           echo "SDK=$SDK" >> "$GITHUB_ENV"
-          # 自訂 -resource-dir（stage-rd 只抄了 lib/swift）會讓前端推導不出
-          # Clang 資源目錄，內建頭（stdarg.h 等）缺失、Darwin 模塊建不起來
-          # ——run #2 實證。跟裝置端橋接層同款解法：明文傳 -Xcc -resource-dir。
-          CLANG_RD="$(dirname "$(ls -d "$HOST_TC_USR"/lib/clang/*/include | head -1)")"
-          test -f "$CLANG_RD/include/stdarg.h"
-          echo "CLANG_RD=$CLANG_RD" >> "$GITHUB_ENV"
-          echo "clang resource dir: $CLANG_RD"
           SRC="$SWIFTSRC/stdlib/public/Concurrency"
           mkdir -p out/_Concurrency.swiftmodule
           # 源码清單逐字對應 stdlib/public/Concurrency/CMakeLists.txt 的
@@ -181,12 +182,11 @@ jobs:
           )
           # 旗標對齊官方接口頭記錄的 swift-module-flags，只把 target 換成 ios15.0
           cd "$SRC"
-          "$HOST_FRONTEND" -frontend -emit-module "${SOURCES[@]}" \
+          "$STAGE_FE" -frontend -emit-module "${SOURCES[@]}" \
             -module-name _Concurrency \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK" \
             -resource-dir "$STAGE_RD" \
-            -Xcc -resource-dir -Xcc "$CLANG_RD" \
             -I "$SRC/InternalShims" \
             -parse-stdlib -swift-version 5 -O \
             -enable-library-evolution -enable-objc-interop \
@@ -228,15 +228,14 @@ jobs:
           # ios15 目標 typecheck 一段 import _Concurrency 的代碼；若二進制
           # 被拒、回退現場建模塊，ModuleCache 會多出 _Concurrency 產物，
           # 以此判別（Mac 上現場建可能成功，不能只看 typecheck 過不過）。
-          rm -rf stage-rd/iphoneos/_Concurrency.swiftmodule
-          cp -R out/_Concurrency.swiftmodule stage-rd/iphoneos/
+          rm -rf "$STAGE_RD/iphoneos/_Concurrency.swiftmodule"
+          cp -R out/_Concurrency.swiftmodule "$STAGE_RD/iphoneos/"
           printf 'import _Concurrency\npublic func probe() async { await Task.yield() }\n' > /tmp/probe.swift
           rm -rf /tmp/verify-cache
-          "$HOST_FRONTEND" -frontend -typecheck /tmp/probe.swift \
+          "$STAGE_FE" -frontend -typecheck /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK" \
             -resource-dir "$STAGE_RD" \
-            -Xcc -resource-dir -Xcc "$CLANG_RD" \
             -module-cache-path /tmp/verify-cache
           echo "module cache after typecheck:"
           ls /tmp/verify-cache || true
