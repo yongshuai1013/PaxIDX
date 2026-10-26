@@ -180,10 +180,41 @@ jobs:
             '/tmp/gyb-out/TaskGroup+addTask.swift'
             /tmp/gyb-out/Task+immediate.swift
           )
+          # 可用性定義：照 stdlib 構建的 AddSwiftStdlib.cmake 原樣複刻——
+          # 讀 utils/availability-macros.def 全量傳 -define-availability，
+          # 並為每個 SwiftStdlib 定義生成 StdlibDeploymentTarget 孿生定義
+          # （iOS 版本大於部署目標 15.0 的，整段換成只剩 iOS 15.0）。
+          # 缺這套定義時前端用內建舊表（5.1→iOS 12.2 等），源码的
+          # @available(SwiftStdlib …) 展開後跟語言特性下限對不上，
+          # run #4 實證 262 個 availability 錯誤。
+          python3 - "$SWIFTSRC/utils/availability-macros.def" > /tmp/avail_args.txt <<'PYEOF'
+          import re, sys
+          defs = []
+          for line in open(sys.argv[1]):
+              line = line.strip()
+              if line and not line.startswith('#'):
+                  defs.append(line)
+          def ver_tuple(s):
+              return tuple(int(x) for x in s.split('.'))
+          DEPLOY = '15.0'
+          out = []
+          for d in defs:
+              out += ['-define-availability', d]
+              if d.startswith('SwiftStdlib '):
+                  twin = 'StdlibDeploymentTarget' + d[len('SwiftStdlib'):]
+                  m = re.search(r'iOS ([0-9]+(?:\.[0-9]+)+)', d)
+                  if m and m.group(1) != '9999' and ver_tuple(m.group(1)) > ver_tuple(DEPLOY):
+                      twin = re.sub(r':.*', ':iOS ' + DEPLOY, twin, count=1)
+                  out += ['-define-availability', twin]
+          print('\n'.join(out))
+          PYEOF
+          mapfile -t AVAIL_ARGS < /tmp/avail_args.txt
+          echo "availability args: ${#AVAIL_ARGS[@]}"
           # 旗標對齊官方接口頭記錄的 swift-module-flags，只把 target 換成 ios15.0
           cd "$SRC"
           "$STAGE_FE" -frontend -emit-module "${SOURCES[@]}" \
             -module-name _Concurrency \
+            "${AVAIL_ARGS[@]}" \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK" \
             -resource-dir "$STAGE_RD" \
