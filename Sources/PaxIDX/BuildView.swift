@@ -16,6 +16,8 @@ extension Array where Element == String {
 
 /// 編譯頁：XForge 風格的文件瀏覽器
 struct BuildView: View {
+    /// 手造 FORCE_LOAD 替身目標文件（Mach-O arm64 物件，22 個符號）的 base64
+    private static let forceLoadStubBase64 = "z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALAAAAAAAAAAAAAAAAAAAACwAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAAsAAAAAAAAADQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAAgAEAABYAAADgAgAAMQMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAACcAAAAPAQAACAAAAAAAAABQAAAADwEAABAAAAAAAAAAdgAAAA8BAAAYAAAAAAAAAJoAAAAPAQAAIAAAAAAAAADBAAAADwEAACgAAAAAAAAA6AAAAA8BAAAwAAAAAAAAABgBAAAPAQAAOAAAAAAAAAA6AQAADwEAAEAAAAAAAAAAZAEAAA8BAABIAAAAAAAAAIsBAAAPAQAAUAAAAAAAAACpAQAADwEAAFgAAAAAAAAA0gEAAA8BAABgAAAAAAAAAPkBAAAPAQAAaAAAAAAAAAAlAgAADwEAAHAAAAAAAAAASQIAAA8BAAB4AAAAAAAAAGoCAAAPAQAAgAAAAAAAAACKAgAADwEAAIgAAAAAAAAArAIAAA8BAACQAAAAAAAAAM0CAAAPAQAAmAAAAAAAAADtAgAADwEAAKAAAAAAAAAAEAMAAA8BAACoAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdERpc3RyaWJ1dGVkAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0SWRlbnRpdHlMb29rdXAAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRPYnNlcnZhdGlvbgBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdFBlbmNpbEtpdABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdFJlZ2V4QnVpbGRlcgBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdFJlbW90ZU1pcnJvcgBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdFNvdW5kQW5hbHlzaXNfUHJpdmF0ZQBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdFNwYXRpYWwAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRTeW5jaHJvbml6YXRpb24AX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRWaWRlb1Rvb2xib3gAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRYUEMAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRfQnVpbHRpbl9mbG9hdABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdF9SZWdleFBhcnNlcgBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdF9TdHJpbmdQcm9jZXNzaW5nAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0X1ZvbGF0aWxlAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0X2Vycm5vAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0X21hdGgAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRfc2lnbmFsAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0X3N0ZGlvAF9fc3dpZnRfRk9SQ0VfTE9BRF8kX3N3aWZ0X3RpbWUAX19zd2lmdF9GT1JDRV9MT0FEXyRfc3dpZnRzeXNfdGltZQBfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdHVuaXN0ZAA="
     let project: Project
     @Environment(\.presentationMode) private var presentationMode
     @State private var buildLog = ""
@@ -314,7 +316,24 @@ struct BuildView: View {
                 }
                 log("鏈接…")
                 let exePath = buildDir.appendingPathComponent(project.name).path
-                let ldArgs = ["ld", "-o", exePath] + objects + [
+                // FORCE_LOAD 替身目標文件：SDK 以 .tbd 宣告的 libswift* 迷你
+                // 庫裡有 22 支在 iOS 15 系統裡沒有真身（_errno／_math／_stdio
+                // 等 C 墊片模塊與若干新系統模塊，實現都在父庫裡），偏偏每個
+                // 消費者物件都會引用它們的 __swift_FORCE_LOAD_$_swift* 標記
+                // 符號——裝置 lld 讀 .tbd 等於讀空，符號無處可連（2026-10-26
+                // 真機日誌實證 12 個未定義）。比照橋接層 swiftCompatibility56
+                // 替身的做法：隨鏈接附一顆手造目標文件（forceLoadStubBase64，
+                // 22 個符號各一個 8 位元組零值全域）在本程序內定義這批符號；
+                // 無人解引用、不產生任何載入命令，運行時不會去找不存在的庫。
+                var linkObjects = objects
+                let stubPath = buildDir.appendingPathComponent("paxidx-forceload-stub.o").path
+                if let stubData = Data(base64Encoded: Self.forceLoadStubBase64) {
+                    try? stubData.write(to: URL(fileURLWithPath: stubPath))
+                    if FileManager.default.fileExists(atPath: stubPath) {
+                        linkObjects.append(stubPath)
+                    }
+                }
+                let ldArgs = ["ld", "-o", exePath] + linkObjects + [
                     "-target", "arm64-apple-ios15.0",
                     "-isysroot", sdk,
                 ]
