@@ -11,6 +11,7 @@ struct NyxLoadTestView: View {
     @State private var running = false
     @State private var compileReport = "尚未執行"
     @State private var compiling = false
+    @State private var progressText = ""
 
     var body: some View {
         List {
@@ -47,6 +48,12 @@ struct NyxLoadTestView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            Section(header: Text("上次試編進度（閃退定位用）")) {
+                Text(progressText.isEmpty ? "（無記錄）" : progressText)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                Button("重新讀取進度") { loadProgress() }
+            }
             Section(header: Text("試編結果")) {
                 Text(compileReport)
                     .font(.system(.caption, design: .monospaced))
@@ -54,20 +61,31 @@ struct NyxLoadTestView: View {
             }
         }
         .navigationTitle("Nyxian 載入實測")
+        .onAppear { loadProgress() }
+    }
+
+    private func loadProgress() {
+        var buf = [CChar](repeating: 0, count: 8192)
+        _ = paxidx_nyx_progress(&buf, buf.count)
+        progressText = String(cString: buf)
     }
 
     private func runCompile() {
         compiling = true
         compileReport = "執行中…"
-        DispatchQueue.global(qos: .userInitiated).async {
+        // 用大棧的專用線程跑，順便排除 GCD 工作線程棧太小（512KB）壓垮 LLVM 的可能
+        let thread = Thread {
             var buf = [CChar](repeating: 0, count: 32768)
             let rc = paxidx_nyx_compile_test(&buf, buf.count)
             let text = String(cString: buf)
             DispatchQueue.main.async {
                 compiling = false
                 compileReport = "rc=\(rc)\n\(text)"
+                loadProgress()
             }
         }
+        thread.stackSize = 32 * 1024 * 1024
+        thread.start()
     }
 
     private func runTest() {

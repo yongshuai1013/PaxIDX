@@ -264,6 +264,24 @@ extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
 // （引數比照一般 clang 命令行），由 driver 產 job 後逐個執行，
 // 診斷以 CCDiagnostic 存取器讀出。範例 C 檔寫入 App 暫存目錄，
 // SDK 用 App 已下載的那份（Documents/SDK/iPhoneOS.sdk）。
+
+// 試編步驟進度（崩潰定位）：每過一步就把標記 append 到
+// Documents/nyx-progress.txt 並 fflush；若中途閃退，App 重開後
+// 由實測頁讀出，即可知死在哪一步。
+static NSString *nyxProgressPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/nyx-progress.txt"];
+}
+static void nyxMark(const char *step) {
+    FILE *f = fopen(nyxProgressPath().UTF8String, "a");
+    if (f) { fputs(step, f); fputc('\n', f); fflush(f); fclose(f); }
+}
+extern "C" int paxidx_nyx_progress(char *buffer, size_t capacity) {
+    NSString *content = [NSString stringWithContentsOfFile:nyxProgressPath()
+                                                  encoding:NSUTF8StringEncoding error:nil];
+    copyDiag(content ? content.UTF8String : "（無進度記錄）", buffer, capacity);
+    return 0;
+}
+
 typedef struct __CCJob *CCJobRef2;
 typedef struct __CCDriver *CCDriverRef2;
 typedef struct __CCDiagnostic *CCDiagnosticRef2;
@@ -277,6 +295,8 @@ typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     std::string report;
     auto line = [&](const std::string &t) { report += t; report += "\n"; };
+    { FILE *f = fopen(nyxProgressPath().UTF8String, "w"); if (f) fclose(f); }
+    nyxMark("start");
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
         stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/CoreCompiler"];
@@ -292,6 +312,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         copyDiag(report.c_str(), buffer, capacity);
         return 1;
     }
+    nyxMark("dlopen ok");
     auto sym = [&](const char *name) -> void * {
         void *p = dlsym(h, name);
         if (!p) line(std::string("缺符號：") + name);
@@ -303,6 +324,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     auto pDiagLevel = (CCDiagnosticGetLevelFn)sym("CCDiagnosticGetLevel");
     auto pDiagMessage = (CCDiagnosticGetMessageFn)sym("CCDiagnosticGetMessage");
     auto pJobOutput = (CCJobGetOutputFileURLFn)sym("CCJobGetOutputFileURL");
+    nyxMark("symbols ok");
     if (!pDriverCreate || !pDriverJobs || !pJobExecute) {
         copyDiag(report.c_str(), buffer, capacity);
         return 1;
@@ -324,6 +346,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     line("SDK：" + std::string(sdk.UTF8String));
     NSArray *args = @[@"-target", @"arm64-apple-ios15.0", @"-isysroot", sdk,
                       @"-c", src, @"-o", obj];
+    nyxMark("src+sdk ready");
     CCDriverRef2 driver = pDriverCreate(kCFAllocatorSystemDefault,
                                          (__bridge CFArrayRef)args, 0);
     if (!driver) {
@@ -331,9 +354,11 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         copyDiag(report.c_str(), buffer, capacity);
         return 1;
     }
+    nyxMark("driver created");
     line("driver 建立成功");
     CFArrayRef jobs = pDriverJobs(kCFAllocatorSystemDefault, driver);
     CFIndex njobs = jobs ? CFArrayGetCount(jobs) : 0;
+    { char b[64]; snprintf(b, sizeof(b), "jobs created n=%ld", (long)njobs); nyxMark(b); }
     line("driver 產出 job 數：" + std::to_string((long)njobs));
     static const char *kLevelNames[] = {"note", "remark", "warning", "error", "fatal", "unknown"};
     bool ok = false;
@@ -345,6 +370,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 line("job 輸出：" + std::string([(__bridge NSURL *)out path].UTF8String ?: ""));
             }
         }
+        { char b[64]; snprintf(b, sizeof(b), "executing job %ld", (long)i); nyxMark(b); }
         CFArrayRef diags = NULL;
         CFStringRef mainSrc = NULL;
         Boolean success = pJobExecute(job, &diags, &mainSrc);
@@ -363,6 +389,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         if (mainSrc) CFRelease(mainSrc);
         ok = ok || success;
     }
+    nyxMark("jobs done");
     if (jobs) CFRelease(jobs);
     CFRelease(driver);
     if ([fm fileExistsAtPath:obj]) {
@@ -372,6 +399,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     } else {
         line("產物 test.o 不存在");
     }
+    nyxMark("finished");
     copyDiag(report.c_str(), buffer, capacity);
     return ok ? 0 : 1;
 }

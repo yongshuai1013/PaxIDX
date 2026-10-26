@@ -39,6 +39,9 @@ int paxidx_nyx_dlopen_test(char *buffer, size_t capacity);
 /// 把一個內建範例 C 檔編成 .o，報告寫入 buffer；0=編出產物、1=失敗、2=未內嵌
 int paxidx_nyx_compile_test(char *buffer, size_t capacity);
 
+/// 讀上次試編的步驟進度檔（崩潰定位用），0=成功寫入
+int paxidx_nyx_progress(char *buffer, size_t capacity);
+
 /// 編譯 Swift 源文件到 .o，0=成功（僅 Swift 版 dylib 有）
 /// argv 形如：["swiftc", "-target", <triple>, "-sdk", <sdk>, "-o", <obj>, <src.swift>]
 /// diagnostics 收編譯器診斷文字（可為 NULL）
