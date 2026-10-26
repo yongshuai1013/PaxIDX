@@ -122,7 +122,9 @@ jobs:
           cp -R pkg/swift-stdlib-ios/SwiftOnoneSupport.swiftmodule stage-tc-usr/lib/swift/iphoneos/
           cp -R pkg/swift-stdlib-ios/_Concurrency.swiftmodule stage-tc-usr/lib/swift/iphoneos/
           echo "STAGE_SWIFTC=$PWD/stage-tc-usr/bin/swiftc" >> "$GITHUB_ENV"
+          echo "STAGE_FE=$PWD/stage-tc-usr/bin/swift-frontend" >> "$GITHUB_ENV"
           test -x stage-tc-usr/bin/swiftc
+          test -x stage-tc-usr/bin/swift-frontend
 
       - name: Probe build (host frontend rebuilds the interface-only modules)
         shell: bash
@@ -144,10 +146,17 @@ jobs:
           }
           SWIFT
           rm -rf /tmp/fcache
-          "$STAGE_SWIFTC" -typecheck /tmp/probe.swift \
+          # 直調前端、不走 driver：driver 會先做 SDK 支援檢查，拿 6.1.2
+          # 世代的 SDK 餵 6.2.4 編譯器直接被拒（this SDK is not supported）；
+          # 裝置橋接調的也是前端本體、沒有這道檢查（#1 實證）。-Xcc
+          # -resource-dir 指到 SDK 自己的 clang 目錄，與裝置橋接一致，
+          # 順帶避開主機工具鏈 modulemap 與 SDK 的 libxml2 重定義衝突。
+          "$STAGE_FE" -frontend -typecheck /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK_DIR" \
-            -module-cache-path /tmp/fcache
+            -enable-objc-interop \
+            -module-cache-path /tmp/fcache \
+            -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5"
           echo "=== module cache tree ==="
           find /tmp/fcache -name '*.swiftmodule' -type f | sort
 
@@ -205,10 +214,12 @@ jobs:
             esac
           done < /tmp/harvested.txt
           rm -rf /tmp/fcache2
-          "$STAGE_SWIFTC" -typecheck /tmp/probe.swift \
+          "$STAGE_FE" -frontend -typecheck /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK_DIR" \
-            -module-cache-path /tmp/fcache2
+            -enable-objc-interop \
+            -module-cache-path /tmp/fcache2 \
+            -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5"
           echo "=== cache2 (rebuilt again?) ==="
           find /tmp/fcache2 -name '*.swiftmodule' -type f | sort || true
           while read -r mod dest; do
