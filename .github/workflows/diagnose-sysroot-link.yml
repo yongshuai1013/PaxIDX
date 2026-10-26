@@ -22,17 +22,6 @@ jobs:
           unzip -q /tmp/sdk.zip -d /tmp/sdkroot
           SDK=$(echo /tmp/sdkroot/iPhoneOS*.sdk)
           echo "SDK=$SDK" >> "$GITHUB_ENV"
-          curl -fL -o /tmp/mods.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/swift-toolchain-modules.zip"
-          mkdir -p /tmp/mods && unzip -q /tmp/mods.zip -d /tmp/mods
-          # 帶二進制的模塊：清接口＋整目錄替換（與 App 149a56ae 一致）
-          for d in /tmp/mods/swift-stdlib-ios/*.swiftmodule; do
-            name=$(basename "$d")
-            if [ -f "$d/arm64-apple-ios.swiftmodule" ]; then
-              rm -f "$d"/*.swiftinterface
-              rm -rf "$SDK/usr/lib/swift/$name"
-            fi
-          done
-          cp -R /tmp/mods/swift-stdlib-ios/. "$SDK/usr/lib/swift/"
           # sysroot：從正式 release 下載（與 App 裝的同一份字節）
           curl -fL -o /tmp/sysroot.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/sysroot-ios15/paxidx-sysroot-ios15.zip"
           mkdir -p "$SDK/paxidx-sysroot"
