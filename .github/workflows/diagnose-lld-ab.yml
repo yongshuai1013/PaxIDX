@@ -80,9 +80,11 @@ jobs:
             -DLLVM_INCLUDE_TESTS=OFF \
             -DLLVM_INCLUDE_EXAMPLES=OFF \
             -DLLVM_INCLUDE_BENCHMARKS=OFF
-          ninja -C llvm-build ld64.lld
-          ls -la llvm-build/bin/ld64.lld
-          echo "LLD=$PWD/llvm-build/bin/ld64.lld" >> "$GITHUB_ENV"
+          ninja -C llvm-build lld
+          ls -la llvm-build/bin/lld
+          # lld 靠 argv[0] 分派驅動風格：以 ld64.lld 之名呼叫才是 Mach-O 驅動
+          ln -sf "$PWD/llvm-build/bin/lld" /tmp/ld64.lld
+          echo "LLD=/tmp/ld64.lld" >> "$GITHUB_ENV"
 
       - name: Restore the host Swift 6.2.4 toolchain
         id: host-swift-cache
