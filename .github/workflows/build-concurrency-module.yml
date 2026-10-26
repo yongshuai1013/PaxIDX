@@ -199,7 +199,7 @@ jobs:
             -enable-experimental-feature IsolatedAny \
             -enable-experimental-feature AllowUnsafeAttribute \
             -enable-experimental-feature Extern \
-            -Xfrontend -swift-async-frame-pointer=always \
+            -swift-async-frame-pointer=always \
             -emit-module-path "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule/arm64-apple-ios.swiftmodule" \
             -emit-module-interface-path "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface"
           ls -la "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule"
