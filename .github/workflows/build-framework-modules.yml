@@ -102,6 +102,19 @@ jobs:
             fi
           done
           cp -R pkg/swift-stdlib-ios/. "$SDK/usr/lib/swift/"
+          # 框架模塊比照 App 疊加（#10 教訓：之前組裝步漏了這一棵樹，
+          # 組裝出的 SDK 根本不是裝置等價——Foundation 沒二進制、探針的
+          # 跳過守衛永遠不觸發）。帶二進制的模塊：清包內接口＋整目錄替換。
+          if [ -d pkg/swift-frameworks-ios ]; then
+            find pkg/swift-frameworks-ios -type d -name '*.swiftmodule' | while read -r d; do
+              if [ -f "$d/arm64-apple-ios.swiftmodule" ]; then
+                rm -f "$d"/*.swiftinterface
+                rel="${d#pkg/swift-frameworks-ios/}"
+                rm -rf "$SDK/$rel"
+              fi
+            done
+            cp -R pkg/swift-frameworks-ios/. "$SDK/"
+          fi
           # Clang 頭文件比照 App：裝到 usr/lib/clang/19.1.5
           rm -rf /tmp/clangx && mkdir /tmp/clangx
           unzip -q /tmp/pkg-dl/clang-resource-headers.zip -d /tmp/clangx
@@ -109,7 +122,7 @@ jobs:
           mkdir -p "$SDK/usr/lib/clang/19.1.5"
           for v in /tmp/clangx/clang-headers/*/; do cp -R "$v/." "$SDK/usr/lib/clang/19.1.5/"; done
           ls "$SDK/usr/lib/swift" | head -8
-          test -f "$SDK/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule/arm64-apple-ios.swiftinterface"
+          test -d "$SDK/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule"
           # 刪掉 SDK 裡重複的 libxml 樹（#4 探針唯一露出的真錯誤就是它）：
           # 這份 SDK 同時有 usr/include/libxml2/（正版位置）與一整棵複製到
           # usr/include/libxml/ 的分身，兩邊的 module.modulemap 都宣告
