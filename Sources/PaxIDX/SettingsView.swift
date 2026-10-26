@@ -132,7 +132,7 @@ struct SettingsView: View {
                         Button(sysrootInstalled ? "重新安裝系統函式庫" : "安裝系統函式庫") {
                             installSysroot()
                         }
-                        Text("連結器讀不了 SDK 的 .tbd，系統函式庫在裝置上又只有 dyld 快取裡有；這一包是從 iOS 15.8.5 固件抽出的真 dylib 副本（約 36MB），裝進 SDK 目錄供連結使用")
+                        Text("連結器讀不了 SDK 的 .tbd，系統函式庫在裝置上又只有 dyld 快取裡有；這一包是從 iOS 15.8.5 固件抽出的真 dylib 副本（主包約 36MB，另自動附帶框架附加包約 24MB），裝進 SDK 目錄供連結使用")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -141,6 +141,14 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                }
+                Section(header: Text("下載管理")) {
+                    NavigationLink(destination: DownloadsView()) {
+                        Text("模塊／函式庫下載管理")
+                    }
+                    Text("SDK、Swift 模塊、Clang 頭文件、系統函式庫集中一頁，各有狀態與重新下載（2026-10-26 起）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 Section(header: Text("關於")) {
                     HStack {
