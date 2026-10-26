@@ -333,6 +333,23 @@ struct BuildView: View {
                         linkObjects.append(stubPath)
                     }
                 }
+                // TBD 診斷（實驗，2026-10-26 永帥選定「先做廉價診斷」）：
+                // 把 SDK 的 .tbd 當連結輸入餵給裝置 lld，驗證它在裝置真
+                // 連結裡到底讀不讀 .tbd——TextAPI 的符號在工具鏈 dylib
+                // 裡實在，但從未在裝置上實證；當年只有一行舊日誌的
+                // "unhandled file type"（正是 libSystem.tbd 這支）。兩支
+                // .tbd 宣告的安裝名與 sysroot 真身相同，縱使被用來綁
+                // 符號，產物記的仍是系統原名，不影響運行。判定：連結如
+                // 常成功＝讀得了；報 unhandled file type＝裝置驅動沒開
+                // 讀取；報 tapi 解析錯＝讀了但版本不合。
+                for tbdRel in ["usr/lib/libSystem.tbd",
+                               "System/Library/Frameworks/Foundation.framework/Foundation.tbd"] {
+                    let tbdPath = (sdk as NSString).appendingPathComponent(tbdRel)
+                    if FileManager.default.fileExists(atPath: tbdPath) {
+                        linkObjects.append(tbdPath)
+                        log("TBD 診斷：加入連結輸入 \(tbdRel)")
+                    }
+                }
                 let ldArgs = ["ld", "-o", exePath] + linkObjects + [
                     "-target", "arm64-apple-ios15.0",
                     "-isysroot", sdk,
