@@ -1,0 +1,248 @@
+# 用官方 6.2.4 主機前端，把裝置端現場重建會卡死的框架／系統 Swift 模塊
+# （Foundation 為首，連帶 CoreFoundation／Dispatch／System／Observation／
+# Combine／_StringProcessing 等）在主機預編成 ios15 二進制，補進
+# swift-toolchain-modules.zip。
+#
+# 背景（2026-10-26 真機實證）：import Foundation 時裝置前端要現場重建
+# Foundation（住 Foundation.framework/Modules、僅 6.1.2 接口）連同一串
+# 依賴，在 A10 上逾 8 分鐘卡死。主機編譯器做同樣的接口重建只需片刻；
+# 把它 ModuleCache 裡的產物收割下來，就是裝置可直接載入的二進制模塊
+# （與 _Concurrency 的 A 路同理：同版本前端、ios15 目標）。
+# 本 workflow 只動模塊包這一個資產；包的佈局新增 swift-frameworks-ios/
+# 樹（鏡像 SDK 根以下的 System/Library/Frameworks 路徑），App 疊加時
+# 按同一相對路徑裝進 SDK 的框架目錄。
+name: build-framework-modules
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAG: toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5
+  SWIFT_REF: swift-6.2.4-RELEASE
+
+jobs:
+  build-framework-modules:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Restore the host Swift 6.2.4 toolchain
+        id: host-swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: host-swift-toolchain
+          key: host-swift-6.2.4-osx-toolchain-v1
+
+      - name: Fetch the host Swift 6.2.4 toolchain
+        if: steps.host-swift-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 -o /tmp/swift-6.2.4-RELEASE-osx.pkg \
+            "https://download.swift.org/swift-6.2.4-release/xcode/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE-osx.pkg"
+          rm -rf /tmp/swift-pkg-x host-swift-toolchain
+          mkdir -p /tmp/swift-pkg-x/extracted
+          xar -xf /tmp/swift-6.2.4-RELEASE-osx.pkg -C /tmp/swift-pkg-x
+          find /tmp/swift-pkg-x -name Payload -type f -print0 | while IFS= read -r -d '' payload; do
+            tar -xf "$payload" -C /tmp/swift-pkg-x/extracted
+          done
+          SWIFTC_PATH="$(find /tmp/swift-pkg-x/extracted -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          TC_ROOT="$(dirname "$(dirname "$(dirname "$SWIFTC_PATH")")")"
+          mkdir -p host-swift-toolchain
+          cp -a "$TC_ROOT" host-swift-toolchain/
+
+      - name: Save the host Swift 6.2.4 toolchain
+        if: steps.host-swift-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.host-swift-cache.outputs.cache-primary-key }}
+          path: host-swift-toolchain
+
+      - name: Locate the host toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          "$SWIFTC_PATH" --version | grep -F 'Swift version 6.2.4'
+          TC_USR="$(dirname "$(dirname "$SWIFTC_PATH")")"
+          echo "HOST_TC_USR=$TC_USR" >> "$GITHUB_ENV"
+
+      - name: Download SDK + current modules package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          curl -fL -o /tmp/sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --dir /tmp/pkg-dl
+          mkdir -p pkg && unzip -q /tmp/pkg-dl/swift-toolchain-modules.zip -d pkg
+          ls pkg/swift-stdlib-ios | head
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'clang-resource-headers.zip' --dir /tmp/pkg-dl
+
+      - name: Assemble the device-equivalent SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf sdkroot && mkdir sdkroot
+          unzip -q /tmp/sdk.zip -d sdkroot
+          SDK="$(echo "$PWD"/sdkroot/iPhoneOS*.sdk)"
+          echo "SDK_DIR=$SDK" >> "$GITHUB_ENV"
+          # 與 App 疊加邏輯一致：帶二進制的模塊先在包內清接口、再整目錄替換
+          for d in pkg/swift-stdlib-ios/*.swiftmodule; do
+            name="$(basename "$d")"
+            if [ -f "$d/arm64-apple-ios.swiftmodule" ]; then
+              rm -f "$d"/*.swiftinterface
+              rm -rf "$SDK/usr/lib/swift/$name"
+            fi
+          done
+          cp -R pkg/swift-stdlib-ios/. "$SDK/usr/lib/swift/"
+          # Clang 頭文件比照 App：裝到 usr/lib/clang/19.1.5
+          rm -rf /tmp/clangx && mkdir /tmp/clangx
+          unzip -q /tmp/pkg-dl/clang-resource-headers.zip -d /tmp/clangx
+          rm -rf "$SDK/usr/lib/clang"
+          mkdir -p "$SDK/usr/lib/clang/19.1.5"
+          for v in /tmp/clangx/clang-headers/*/; do cp -R "$v/." "$SDK/usr/lib/clang/19.1.5/"; done
+          ls "$SDK/usr/lib/swift" | head -8
+          test -f "$SDK/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule/arm64-apple-ios.swiftinterface"
+
+      - name: Stage a full toolchain copy (concurrency workflow's proven staging)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf stage-tc-usr
+          rsync -a "$HOST_TC_USR/" stage-tc-usr/
+          rm -rf stage-tc-usr/lib/swift/iphoneos/Swift.swiftmodule stage-tc-usr/lib/swift/iphoneos/SwiftOnoneSupport.swiftmodule stage-tc-usr/lib/swift/iphoneos/_Concurrency.swiftmodule
+          cp -R pkg/swift-stdlib-ios/Swift.swiftmodule stage-tc-usr/lib/swift/iphoneos/
+          cp -R pkg/swift-stdlib-ios/SwiftOnoneSupport.swiftmodule stage-tc-usr/lib/swift/iphoneos/
+          cp -R pkg/swift-stdlib-ios/_Concurrency.swiftmodule stage-tc-usr/lib/swift/iphoneos/
+          echo "STAGE_SWIFTC=$PWD/stage-tc-usr/bin/swiftc" >> "$GITHUB_ENV"
+          test -x stage-tc-usr/bin/swiftc
+
+      - name: Probe build (host frontend rebuilds the interface-only modules)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > /tmp/probe.swift <<'SWIFT'
+          import Foundation
+          import Dispatch
+          import CoreFoundation
+          public func probe() {
+              let now = Date()
+              _ = Calendar.current.component(.year, from: now)
+              _ = FileManager.default.temporaryDirectory
+              Thread.sleep(forTimeInterval: 0.001)
+              let q = DispatchQueue(label: "probe")
+              q.sync {}
+              _ = JSONSerialization.isValidJSONObject(["a": 1])
+              _ = CFStringCreateWithCString(nil, "x", 0)
+          }
+          SWIFT
+          rm -rf /tmp/fcache
+          "$STAGE_SWIFTC" -typecheck /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_DIR" \
+            -module-cache-path /tmp/fcache
+          echo "=== module cache tree ==="
+          find /tmp/fcache -name '*.swiftmodule' -type f | sort
+
+      - name: Harvest the rebuilt binary modules
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf harvest && mkdir -p harvest
+          : > /tmp/harvested.txt
+          find /tmp/fcache -name '*.swiftmodule' -type f | while read -r f; do
+            base="$(basename "$f")"
+            mod="$(echo "$base" | sed -E 's/^([A-Za-z_][A-Za-z0-9_]*)(-[A-Za-z0-9_-]+)?\.swiftmodule$/\1/')"
+            echo "$mod $f" >> /tmp/harvested_raw.txt
+          done
+          sort -u /tmp/harvested_raw.txt -o /tmp/harvested_raw.txt
+          cat /tmp/harvested_raw.txt
+          # 硬閘：Swift／_Concurrency 不許出現在重建產物裡（出現＝staging 影子沒生效）
+          if grep -qE '^(Swift|_Concurrency) ' /tmp/harvested_raw.txt; then
+            echo "::error::Swift/_Concurrency 被重建了，staging 有問題"
+            exit 1
+          fi
+          while read -r mod f; do
+            # 目的地：先找框架內的同名模塊目錄，否則 usr/lib/swift
+            fwdir="$(find "$SDK_DIR/System/Library/Frameworks" -type d -name "$mod.swiftmodule" -print -quit || true)"
+            if [ -n "$fwdir" ]; then
+              rel="${fwdir#$SDK_DIR/}"
+              dest="harvest/swift-frameworks-ios/$rel"
+            else
+              dest="harvest/swift-stdlib-ios/$mod.swiftmodule"
+            fi
+            mkdir -p "$dest"
+            cp "$f" "$dest/arm64-apple-ios.swiftmodule"
+            echo "$mod -> $dest" >> /tmp/harvested.txt
+          done < /tmp/harvested_raw.txt
+          cat /tmp/harvested.txt
+          grep -q '^Foundation ' /tmp/harvested.txt
+
+      - name: Load test (harvested binaries must be accepted as-is)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # 在組裝好的 SDK 上就地裝入收割產物（清接口＋整目錄替換，比照 App）
+          while read -r mod dest; do
+            case "$dest" in
+              harvest/swift-frameworks-ios/*)
+                rel="${dest#harvest/swift-frameworks-ios/}"
+                rm -rf "$SDK_DIR/$rel"
+                mkdir -p "$(dirname "$SDK_DIR/$rel")"
+                cp -R "$dest" "$SDK_DIR/$rel"
+                ;;
+              harvest/swift-stdlib-ios/*)
+                rm -rf "$SDK_DIR/usr/lib/swift/$mod.swiftmodule"
+                cp -R "$dest" "$SDK_DIR/usr/lib/swift/$mod.swiftmodule"
+                ;;
+            esac
+          done < /tmp/harvested.txt
+          rm -rf /tmp/fcache2
+          "$STAGE_SWIFTC" -typecheck /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_DIR" \
+            -module-cache-path /tmp/fcache2
+          echo "=== cache2 (rebuilt again?) ==="
+          find /tmp/fcache2 -name '*.swiftmodule' -type f | sort || true
+          while read -r mod dest; do
+            if find /tmp/fcache2 -name "$mod-*.swiftmodule" -o -name "$mod.swiftmodule" | grep -q .; then
+              echo "::error::$mod 的二進制被拒、又被現場重建了"
+              exit 1
+            fi
+          done < /tmp/harvested.txt
+          echo "load test passed: all harvested binaries accepted, zero rebuilds"
+
+      - name: Repack the modules package and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          # stdlib 類：放進包的 swift-stdlib-ios（只放二進制，App 會整目錄替換）
+          for d in harvest/swift-stdlib-ios/*.swiftmodule; do
+            [ -d "$d" ] || continue
+            name="$(basename "$d")"
+            mkdir -p "pkg/swift-stdlib-ios/$name"
+            cp "$d/arm64-apple-ios.swiftmodule" "pkg/swift-stdlib-ios/$name/"
+          done
+          # 框架類：包內新增 swift-frameworks-ios 樹（鏡像 SDK 根以下路徑）
+          if [ -d harvest/swift-frameworks-ios ]; then
+            mkdir -p pkg/swift-frameworks-ios
+            cp -R harvest/swift-frameworks-ios/. pkg/swift-frameworks-ios/
+          fi
+          (cd pkg && zip -qr /tmp/swift-toolchain-modules.zip swift-stdlib-ios swift-frameworks-ios)
+          ls -la /tmp/swift-toolchain-modules.zip
+          gh release upload "$TAG" /tmp/swift-toolchain-modules.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          rm -rf /tmp/verify-dl && mkdir -p /tmp/verify-dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --dir /tmp/verify-dl
+          unzip -o -q /tmp/verify-dl/swift-toolchain-modules.zip -d /tmp/verify-dl/x
+          find /tmp/verify-dl/x -name 'arm64-apple-ios.swiftmodule' | sort

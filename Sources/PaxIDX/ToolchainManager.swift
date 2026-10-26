@@ -136,6 +136,12 @@ final class ToolchainManager {
             let binary = sdk.appendingPathComponent("usr/lib/swift/\(module).swiftmodule/arm64-apple-ios.swiftmodule")
             guard FileManager.default.fileExists(atPath: binary.path) else { return false }
         }
+        // Foundation 二進制也要在位（2026-10-26 起模塊包帶 CI 預編的框架
+        // 模塊）：它住 Foundation.framework/Modules、不在 usr/lib/swift；
+        // 缺了它，import Foundation 時裝置前端會現場重建整串框架模塊，
+        // 真機實證在 A10 上卡死逾 8 分鐘。
+        let foundationBinary = sdk.appendingPathComponent("System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule/arm64-apple-ios.swiftmodule")
+        guard FileManager.default.fileExists(atPath: foundationBinary.path) else { return false }
         return true
     }
 
@@ -193,6 +199,25 @@ final class ToolchainManager {
                         try? fm.removeItem(at: destDir.appendingPathComponent(name, isDirectory: true))
                     }
                     try self.overlayCopy(from: srcDir, to: destDir)
+                    // 框架模塊（Foundation／Observation／Combine 等）：包內
+                    // swift-frameworks-ios/ 鏡像 SDK 根以下的框架路徑；帶
+                    // 二進制的模塊先清暫存接口＋刪目的地整目錄再裝，避免
+                    // 接口殘留觸發現場重建（理由同 stdlib 的整目錄替換）。
+                    let fwStage = stage.appendingPathComponent("swift-frameworks-ios", isDirectory: true)
+                    if fm.fileExists(atPath: fwStage.path),
+                       let enumerator = fm.enumerator(at: fwStage, includingPropertiesForKeys: nil) {
+                        for case let item as URL in enumerator {
+                            guard item.pathExtension == "swiftmodule",
+                                  fm.fileExists(atPath: item.appendingPathComponent("arm64-apple-ios.swiftmodule").path)
+                            else { continue }
+                            for file in (try? fm.contentsOfDirectory(atPath: item.path)) ?? [] where file.hasSuffix(".swiftinterface") {
+                                try? fm.removeItem(at: item.appendingPathComponent(file))
+                            }
+                            let rel = item.path.dropFirst(fwStage.path.count)
+                            try? fm.removeItem(atPath: sdk.path + rel)
+                        }
+                        try self.overlayCopy(from: fwStage, to: sdk)
+                    }
                     try? FileManager.default.removeItem(at: stage)
                     completion(.success(()))
                 } catch {
