@@ -114,11 +114,29 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          echo "=== E7a linker options recorded in newfile.o (autolink):"
-          otool -l /tmp/e6/newfile.o | grep -A6 'LC_LINKER_OPTION' || echo "(no LC_LINKER_OPTION found by grep)"
-          echo "--- E7a raw strings around swift lib names in newfile.o:"
-          strings /tmp/e6/newfile.o | grep -E '^-l|swift' | sort -u | head -40
+          # E6 按裝置現況（帶 -parse-as-library）編頂層 print，注定無 .o；
+          # E7 改按「修復後」的橋接參數（去掉 -parse-as-library）自編一份 .o，
+          # 這正是修復後管線真正要連結的對象。
           mkdir -p /tmp/e7/tbd
+          printf 'print("Hello")\n' > /tmp/e7/newfile.swift
+          rm -rf /tmp/cache-e7 && mkdir -p /tmp/cache-e7
+          FE=0
+          "$HOST_FRONTEND" -frontend -c /tmp/e7/newfile.swift \
+            -module-cache-path /tmp/cache-e7 \
+            -Xcc -fmodules-cache-path=/tmp/cache-e7 \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDKROOT" \
+            -resource-dir "$SDKROOT/usr/lib/swift" \
+            -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
+            -enable-objc-interop -emit-object \
+            -o /tmp/e7/newfile.o > /tmp/out-e7c.txt 2>&1 || FE=$?
+          echo "=== E7 compile exit=$FE"
+          cat /tmp/out-e7c.txt
+          ls -la /tmp/e7/newfile.o || echo "E7 NO object"
+          echo "=== E7a linker options recorded in newfile.o (autolink):"
+          otool -l /tmp/e7/newfile.o | grep -A6 'LC_LINKER_OPTION' || echo "(grep found no LC_LINKER_OPTION)"
+          echo "--- E7a strings in newfile.o mentioning swift libs:"
+          (strings /tmp/e7/newfile.o | grep -iE 'swift' | sort -u | head -40) || true
           cat > /tmp/e7/tbd/libswiftCompatibility56.tbd <<'TBD'
           --- !tapi-tbd
           tbd-version:     4
@@ -131,17 +149,20 @@ jobs:
           printf 'int main(void){return 0;}\n' > /tmp/e7/main.c
           clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e7/main.c -o /tmp/e7/main.o || echo "E7 main.o compile failed"
           echo "=== E7b V1: full recipe (-lSystem -lswiftCore + weak compat56 via synthesized tbd)"
-          ld -o /tmp/e7/TestV1 /tmp/e6/newfile.o /tmp/e7/main.o \
+          V1=0
+          ld -o /tmp/e7/TestV1 /tmp/e7/newfile.o /tmp/e7/main.o \
             -arch arm64 -platform_version ios 15.0 18.5 \
             -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" -L/tmp/e7/tbd \
-            -lSystem -lswiftCore -weak-lswiftCompatibility56 > /tmp/out-v1.txt 2>&1
-          echo "V1 exit=$?"; cat /tmp/out-v1.txt
+            -lSystem -lswiftCore -weak-lswiftCompatibility56 > /tmp/out-v1.txt 2>&1 || V1=$?
+          echo "V1 exit=$V1"; cat /tmp/out-v1.txt
           echo "--- V1 load commands:"; otool -L /tmp/e7/TestV1 || echo "(no V1 output)"
-          echo "--- V1 still-undefined:"; nm -u /tmp/e7/TestV1 2>/dev/null || true
+          echo "--- V1 still-undefined:"; (nm -u /tmp/e7/TestV1) || true
           echo "=== E7c V2: no compat56 handling at all (see what the link demands)"
-          ld -o /tmp/e7/TestV2 /tmp/e6/newfile.o /tmp/e7/main.o \
+          V2=0
+          ld -o /tmp/e7/TestV2 /tmp/e7/newfile.o /tmp/e7/main.o \
             -arch arm64 -platform_version ios 15.0 18.5 \
             -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
-            -lSystem -lswiftCore > /tmp/out-v2.txt 2>&1
-          echo "V2 exit=$?"; cat /tmp/out-v2.txt
+            -lSystem -lswiftCore > /tmp/out-v2.txt 2>&1 || V2=$?
+          echo "V2 exit=$V2"; cat /tmp/out-v2.txt
           echo "--- V2 load commands:"; otool -L /tmp/e7/TestV2 || echo "(no V2 output)"
+          echo "=== E7 done"
