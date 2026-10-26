@@ -1,0 +1,51 @@
+import SwiftUI
+
+/// Nyxian CoreCompiler 載入實測頁（實驗，2026-10-26）：
+/// 離線體檢顯示 Nyxian 的 CoreCompiler（minos 16.0）在符號層與
+/// iOS 15.8.5 完全相容、強綁定缺失為零；nyx_test 實驗包會把改戳記
+/// （minos 改 15.0）後的 CoreCompiler.framework 塞進 App 的
+/// Frameworks/，本頁按鈕實際 dlopen 它，驗證 dyld 在 iOS 15 上
+/// 真的肯載入並完成初始化。一般包沒有內嵌，頁面會直接說明。
+struct NyxLoadTestView: View {
+    @State private var report = "尚未執行"
+    @State private var running = false
+
+    var body: some View {
+        List {
+            Section {
+                if !running {
+                    Button("載入 CoreCompiler 實測") {
+                        runTest()
+                    }
+                } else {
+                    Text("載入中…（185MB，首次會慢）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Text("只做 dlopen＋讀版本符號，不呼叫編譯功能。成功＝改戳記後 dyld 接受、且全體初始化在 iOS 15 上跑完；失敗會顯示 dyld 的原文錯誤。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Section(header: Text("結果")) {
+                Text(report)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+        }
+        .navigationTitle("Nyxian 載入實測")
+    }
+
+    private func runTest() {
+        running = true
+        report = "執行中…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var buf = [CChar](repeating: 0, count: 16384)
+            let rc = paxidx_nyx_dlopen_test(&buf, buf.count)
+            let text = String(cString: buf)
+            DispatchQueue.main.async {
+                running = false
+                report = "rc=\(rc)\n\(text)"
+            }
+        }
+    }
+}

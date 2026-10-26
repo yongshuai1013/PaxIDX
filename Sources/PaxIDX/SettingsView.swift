@@ -150,6 +150,14 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                Section(header: Text("實驗")) {
+                    NavigationLink(destination: NyxLoadTestView()) {
+                        Text("Nyxian CoreCompiler 載入實測")
+                    }
+                    Text("僅 nyx_test 實驗包內嵌改戳記（minos 16.0→15.0）版 CoreCompiler；一般包會顯示未內嵌")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Section(header: Text("關於")) {
                     HStack {
                         Text("版本")

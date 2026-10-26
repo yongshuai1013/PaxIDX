@@ -30,6 +30,11 @@ int paxidx_clang_compile(int argc, const char * const *argv,
 int paxidx_ld_link(int argc, const char * const *argv,
                    char *diagnostics, size_t diagnostics_capacity);
 
+/// Nyxian CoreCompiler 載入實測（實驗）：dlopen App 內嵌的
+/// CoreCompiler.framework 並讀其版本符號，報告寫入 buffer；
+/// 0=載入成功、1=載入失敗、2=未內嵌
+int paxidx_nyx_dlopen_test(char *buffer, size_t capacity);
+
 /// 編譯 Swift 源文件到 .o，0=成功（僅 Swift 版 dylib 有）
 /// argv 形如：["swiftc", "-target", <triple>, "-sdk", <sdk>, "-o", <obj>, <src.swift>]
 /// diagnostics 收編譯器診斷文字（可為 NULL）

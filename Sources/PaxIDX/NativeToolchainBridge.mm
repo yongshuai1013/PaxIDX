@@ -209,3 +209,51 @@ extern "C" int paxidx_swift_compile(int argc, const char * const *argv,
     }
     return rc;
 }
+
+// Nyxian CoreCompiler 載入實測（實驗，2026-10-26）：把 nyx_test 實驗包
+// 內嵌的 CoreCompiler.framework（minos 已由 CI 改戳記為 15.0）用
+// dlopen(RTLD_NOW) 真載入一次，驗證 dyld 在 iOS 15 上的接受程度與
+// 全體初始化是否跑得完；再讀它導出的版本符號、並試載一支附屬
+// SwiftSyntax dylib。結果以多行文字寫入 buffer（
+ 分隔）。
+extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
+    std::string report;
+    auto line = [&](const std::string &t) { report += t; report += "\n"; };
+    NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
+        stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/CoreCompiler"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:fwPath]) {
+        line("未內嵌 CoreCompiler.framework（這不是 nyx_test 實驗包）");
+        copyDiag(report, buffer, capacity);
+        return 2;
+    }
+    line("目標：" + std::string(fwPath.UTF8String));
+    dlerror();
+    void *h = dlopen(fwPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) {
+        const char *e = dlerror();
+        line(std::string("dlopen 失敗：") + (e ? e : "(無錯誤文字)"));
+        copyDiag(report, buffer, capacity);
+        return 1;
+    }
+    line("dlopen 成功：CoreCompiler 已載入並完成初始化");
+    if (const char *vs = (const char *)dlsym(h, "_CoreCompilerVersionString"))
+        line(std::string("CoreCompilerVersionString = ") + vs);
+    else
+        line("_CoreCompilerVersionString 未找到");
+    if (double *vn = (double *)dlsym(h, "_CoreCompilerVersionNumber"))
+        line("CoreCompilerVersionNumber = " + std::to_string(*vn));
+    line(dlsym(h, "_LLVMInitializeAArch64Target") ? "_LLVMInitializeAArch64Target 在位"
+                                                  : "_LLVMInitializeAArch64Target 未找到");
+    NSString *syntaxPath = [[fwPath stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"Frameworks/lib_CompilerSwiftSyntax.dylib"];
+    dlerror();
+    void *h2 = dlopen(syntaxPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
+    if (h2)
+        line("附屬 lib_CompilerSwiftSyntax.dylib dlopen 成功");
+    else {
+        const char *e = dlerror();
+        line(std::string("附屬 lib_CompilerSwiftSyntax.dylib dlopen 失敗：") + (e ? e : "(無錯誤文字)"));
+    }
+    copyDiag(report, buffer, capacity);
+    return 0;
+}

@@ -4,6 +4,11 @@ name: Build PaxIDX IPA
 
 on:
   workflow_dispatch:
+    inputs:
+      nyx_test:
+        description: '實驗包：內嵌改戳記（minos 15.0）版 Nyxian CoreCompiler'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -64,6 +69,31 @@ jobs:
           # dylib 塞進 Frameworks，跟 App 一起簽名（iOS 才允許 dlopen）
           mkdir -p build/ipa/Payload/PaxIDX.app/Frameworks
           cp Vendor/NativeToolchain/libPaxIDXNativeToolchain.dylib build/ipa/Payload/PaxIDX.app/Frameworks/
+          if [ "${{ inputs.nyx_test }}" = "true" ]; then
+            echo "nyx_test：下載 Nyxian 0.11.4、改戳記 CoreCompiler 後內嵌"
+            curl -sSL -o /tmp/nyxian.ipa "https://github.com/emexlab/Nyxian/releases/download/0.11.4/Nyxian.ipa"
+            mkdir -p /tmp/nyx && unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Frameworks/CoreCompiler.framework/*" -d /tmp/nyx
+            FWDIR=/tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework python3 - <<'PYEOF'
+          import os, struct, glob
+          fw = os.environ['FWDIR']
+          targets = [os.path.join(fw, 'CoreCompiler')] + sorted(glob.glob(fw + '/Frameworks/*.dylib'))
+          want = 15 << 16
+          for path in targets:
+              d = bytearray(open(path, 'rb').read())
+              n = struct.unpack_from('<I', d, 16)[0]
+              p = 32; hit = 0
+              for _ in range(n):
+                  cmd, size = struct.unpack_from('<II', d, p)
+                  if cmd == 0x32:
+                      struct.pack_into('<I', d, p + 12, want); hit += 1
+                  p += size
+              assert hit == 1, (path, hit)
+              open(path, 'wb').write(d)
+              print('patched minos->15.0:', os.path.basename(path))
+          PYEOF
+            cp -R /tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
+            ls -la build/ipa/Payload/PaxIDX.app/Frameworks/
+          fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
 
       - name: 上傳未簽名 IPA
