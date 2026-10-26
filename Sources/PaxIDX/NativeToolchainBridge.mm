@@ -222,7 +222,7 @@ extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
         stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/CoreCompiler"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:fwPath]) {
         line("未內嵌 CoreCompiler.framework（這不是 nyx_test 實驗包）");
-        copyDiag(report, buffer, capacity);
+        copyDiag(report.c_str(), buffer, capacity);
         return 2;
     }
     line("目標：" + std::string(fwPath.UTF8String));
@@ -231,7 +231,7 @@ extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
     if (!h) {
         const char *e = dlerror();
         line(std::string("dlopen 失敗：") + (e ? e : "(無錯誤文字)"));
-        copyDiag(report, buffer, capacity);
+        copyDiag(report.c_str(), buffer, capacity);
         return 1;
     }
     line("dlopen 成功：CoreCompiler 已載入並完成初始化");
@@ -253,6 +253,6 @@ extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
         const char *e = dlerror();
         line(std::string("附屬 lib_CompilerSwiftSyntax.dylib dlopen 失敗：") + (e ? e : "(無錯誤文字)"));
     }
-    copyDiag(report, buffer, capacity);
+    copyDiag(report.c_str(), buffer, capacity);
     return 0;
 }
