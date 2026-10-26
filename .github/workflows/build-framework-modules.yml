@@ -151,9 +151,14 @@ jobs:
           # 裝置橋接調的也是前端本體、沒有這道檢查（#1 實證）。-Xcc
           # -resource-dir 指到 SDK 自己的 clang 目錄，與裝置橋接一致，
           # 順帶避開主機工具鏈 modulemap 與 SDK 的 libxml2 重定義衝突。
+          # -resource-dir 也照裝置橋接指到 SDK 的 usr/lib/swift：#2 實證
+          # 不指時前端對 CoreFoundation 等接口報 this SDK is not supported
+          # （版本檢查的判定隨模塊是經 resource-dir 還是外部 -sdk 找到而
+          # 不同；裝置橋接一直指著、從未撞過這道拒絕）。
           "$STAGE_FE" -frontend -typecheck /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK_DIR" \
+            -resource-dir "$SDK_DIR/usr/lib/swift" \
             -enable-objc-interop \
             -module-cache-path /tmp/fcache \
             -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5"
@@ -217,6 +222,7 @@ jobs:
           "$STAGE_FE" -frontend -typecheck /tmp/probe.swift \
             -target arm64-apple-ios15.0 \
             -sdk "$SDK_DIR" \
+            -resource-dir "$SDK_DIR/usr/lib/swift" \
             -enable-objc-interop \
             -module-cache-path /tmp/fcache2 \
             -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5"
