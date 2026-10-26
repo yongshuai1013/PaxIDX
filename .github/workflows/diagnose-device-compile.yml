@@ -80,6 +80,7 @@ jobs:
           printf 'print("Hello")\n' > /tmp/newfile.swift
           rm -rf /tmp/devcache
           mkdir -p /tmp/devcache
+          FE=0
           "$HOST_FRONTEND" -frontend -c /tmp/newfile.swift \
             -module-cache-path /tmp/devcache \
             -Xcc -fmodules-cache-path=/tmp/devcache \
@@ -88,8 +89,8 @@ jobs:
             -resource-dir "$SDKROOT/usr/lib/swift" \
             -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
             -enable-objc-interop -parse-as-library -emit-object \
-            -o /tmp/newfile.o > /tmp/compile-out.txt 2>&1
-          echo "frontend exit code: $?"
+            -o /tmp/newfile.o > /tmp/compile-out.txt 2>&1 || FE=$?
+          echo "frontend exit code: $FE"
           echo "--- last 40 lines of output:"
           tail -40 /tmp/compile-out.txt
           echo "--- module cache contents (built-from-interface products land here):"
