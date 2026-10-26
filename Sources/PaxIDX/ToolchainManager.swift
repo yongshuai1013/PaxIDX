@@ -288,6 +288,81 @@ final class ToolchainManager {
         }
     }
 
+    // MARK: - iOS 15 系統函式庫 sysroot（真 dylib 副本）
+
+    private let sysrootReleaseTag = "sysroot-ios15"
+    private let sysrootAssetName = "paxidx-sysroot-ios15.zip"
+
+    /// sysroot 在 SDK 目錄內的安裝點（橋接層連結時按此相對位置找，見
+    /// ToolchainDylibImpl 的 paxidx_dylib_ld_link）
+    static func sysrootDir(in sdk: URL) -> URL {
+        sdk.appendingPathComponent("paxidx-sysroot", isDirectory: true)
+    }
+
+    /// 系統函式庫是否已安裝：連結的主力兩支在位即算（libSystem 傘＋
+    /// libswiftCore；其餘 38 支是它們的依賴閉包，隨包一起裝）
+    var isSysrootInstalled: Bool {
+        guard let sdk = SDKManager.shared.sdkPath else { return false }
+        let root = Self.sysrootDir(in: sdk)
+        let fm = FileManager.default
+        return fm.fileExists(atPath: root.appendingPathComponent("usr/lib/libSystem.B.dylib").path)
+            && fm.fileExists(atPath: root.appendingPathComponent("usr/lib/swift/libswiftCore.dylib").path)
+    }
+
+    /// 下載 iOS 15.8.5 系統函式庫包（真 dylib，從固件 dyld 快取抽出），
+    /// 裝進 SDK 目錄內的 paxidx-sysroot/。
+    /// 為什麼需要它：裝置上的 lld 讀不了 SDK 的 .tbd（真機實證讀成空／
+    /// unhandled file type），而 /usr/lib 的真身只存在於 dyld 快取、磁碟
+    /// 上沒有文件可開——連結只能連容器裡的這份副本；副本的 install name
+    /// 仍是 /usr/lib/...，產物運行時用的還是系統正版。
+    func downloadSysroot(
+        onProgress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urlString = "https://github.com/yongshuai1013/PaxIDX/releases/download/\(sysrootReleaseTag)/\(sysrootAssetName)"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "系統函式庫下載地址無效"])))
+            return
+        }
+        guard let sdk = SDKManager.shared.sdkPath else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "請先下載 SDK，再安裝系統函式庫"])))
+            return
+        }
+        downloadFile(from: url, tempName: "sysroot.zip", onProgress: onProgress) { result in
+            switch result {
+            case .success(let fileURL):
+                do {
+                    let stage = self.containerURL.appendingPathComponent("__sysroot_stage__", isDirectory: true)
+                    try? FileManager.default.removeItem(at: stage)
+                    try self.extract(zip: fileURL, to: stage)
+                    try? FileManager.default.removeItem(at: fileURL)
+                    // zip 內結構：usr/lib/...（根目錄就是 sysroot 本身）
+                    let stagedUsr = stage.appendingPathComponent("usr", isDirectory: true)
+                    guard FileManager.default.fileExists(atPath: stagedUsr.path) else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "系統函式庫包結構不對：缺 usr 目錄"])
+                    }
+                    let dest = Self.sysrootDir(in: sdk)
+                    try? FileManager.default.removeItem(at: dest)
+                    try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+                    try FileManager.default.moveItem(at: stagedUsr, to: dest.appendingPathComponent("usr", isDirectory: true))
+                    try? FileManager.default.removeItem(at: stage)
+                    guard self.isSysrootInstalled else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "系統函式庫安裝後驗證未過"])
+                    }
+                    completion(.success(()))
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     /// 遞歸覆蓋複製（目錄合併、文件覆蓋）
     private func overlayCopy(from src: URL, to dest: URL) throws {
         let fm = FileManager.default

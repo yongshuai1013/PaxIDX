@@ -306,6 +306,9 @@ struct BuildView: View {
                 if objects.count > 1 {
                     log("注意：多個源文件會一起鏈接；Swift 與 C 混編的進入點只能留一個")
                 }
+                if !ToolchainManager.shared.isSysrootInstalled {
+                    return "系統函式庫（sysroot）尚未安裝（到設定頁點「安裝系統函式庫」）"
+                }
                 log("鏈接…")
                 let exePath = buildDir.appendingPathComponent(project.name).path
                 let ldArgs = ["ld", "-o", exePath] + objects + [

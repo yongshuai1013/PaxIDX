@@ -548,6 +548,18 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
     owned.emplace_back(ver);
     owned.emplace_back("-syslibroot");
     owned.emplace_back(sdk);
+    // sysroot（SDK 目錄內的 paxidx-sysroot/，App 從 sysroot-ios15 release
+    // 裝的 iOS 15.8.5 真 dylib 副本）：多給一個 -syslibroot，讓下面顯式
+    // 傳入的 libSystem.B.dylib 的 LC_REEXPORT 絕對路徑（/usr/lib/system/
+    // libsystem_c.dylib 等）在 sysroot 樹下找得到對應真身；autolink 的
+    // -l 搜尋也因此能命中 sysroot 裡的真 dylib。
+    std::string sysroot = std::string(sdk) + "/paxidx-sysroot";
+    owned.emplace_back("-syslibroot");
+    owned.push_back(sysroot);
+    owned.emplace_back("-L");
+    owned.push_back(sysroot + "/usr/lib/swift");
+    owned.emplace_back("-L");
+    owned.push_back(sysroot + "/usr/lib");
     // 正規連結（2026-10-26 定案）：產出執行檔必須自帶函式庫依賴，不再用
     // -undefined dynamic_lookup。那種寫法一條 LC_LOAD_DYLIB 都不寫、全部
     // 符號記成 flat-namespace 運行時查找，dyld 啟動時身邊只有主程序自己，
@@ -557,22 +569,28 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
     // libSystem（那是 clang driver 的行為），須明寫 -lSystem／-lswiftCore
     // ——但不能靠 -lSystem／-lswiftCore 去讀 SDK 的 .tbd：2026-10-26 真機
     // 實證裝置端 lld 讀設備 SDK 的 .tbd 等於讀空（找得到文件、不報錯、
-    // 但一個符號都不貢獻，連 _printf 都未定義；主機 ld-prime 讀同一批
-    // .tbd 卻正常——是這支 lld 的 TextAPI 路徑與這批樁不合，舊註解裡
-    // 「讀 .tbd 解析失敗」即此）。改成把系統裡的真 dylib 按絕對路徑
-    // 直接當連結輸入：真 Mach-O 不經 TextAPI，其 LC_ID_DYLIB 本就是
-    // /usr/lib/... 絕對名，記入產物的正是系統那份，無需 rpath。
-    owned.emplace_back("/usr/lib/libSystem.B.dylib");
-    owned.emplace_back("/usr/lib/swift/libswiftCore.dylib");
+    // 但一個符號都不貢獻，連 _printf 都未定義；更早的日誌裡它還報過
+    // libSystem.tbd: unhandled file type）。主機端 A/B 復現（diagnose-
+    // lld-ab run 40277308620）：同一批 .tbd、同一參數，swift 樹與
+    // Nyxian 樹編出的 lld 在主機上都連得好好的——病不在源碼樹，在
+    // iOS 工具鏈的建構配置層。也不能直連 /usr/lib 的真身：iOS 15 的
+    // 系統函式庫只在 dyld 快取裡、磁碟上無實體文件（真機 cannot open
+    // No such file or directory 實證）。最終路線：連 App 裝在 SDK 目錄
+    // 內的 sysroot 副本（iOS 15.8.5 固件快取抽出的真 dylib，release
+    // sysroot-ios15）——真 Mach-O 不經 TextAPI，其 LC_ID_DYLIB 本就是
+    // /usr/lib/... 絕對名，記入產物的正是系統那份，運行時用正版。
+    owned.push_back(sysroot + "/usr/lib/libSystem.B.dylib");
+    owned.push_back(sysroot + "/usr/lib/swift/libswiftCore.dylib");
     // 以下三支是常用 autolink 目標的真身（存在才加）：並發運行時、
     // -Onone 支援、ObjC 運行時。它們在 SDK 裡只有 .tbd（同樣讀空），
     // 不給真身的話，將來用到 Task／@objc 的代碼會在這裡未定義。
-    for (const char *sysLib : {"/usr/lib/swift/libswift_Concurrency.dylib",
-                               "/usr/lib/swift/libswiftSwiftOnoneSupport.dylib",
-                               "/usr/lib/libobjc.A.dylib"}) {
-        if (FILE *f = fopen(sysLib, "rb")) {
+    for (const std::string &rel : {"/usr/lib/swift/libswift_Concurrency.dylib",
+                                   "/usr/lib/swift/libswiftSwiftOnoneSupport.dylib",
+                                   "/usr/lib/libobjc.A.dylib"}) {
+        std::string sysLib = sysroot + rel;
+        if (FILE *f = fopen(sysLib.c_str(), "rb")) {
             fclose(f);
-            owned.emplace_back(sysLib);
+            owned.push_back(sysLib);
         }
     }
     // libswiftCompatibility56 的佔位符號：6.2.4 標準庫令每個 Swift 目標

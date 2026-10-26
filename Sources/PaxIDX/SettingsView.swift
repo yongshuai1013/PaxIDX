@@ -24,6 +24,8 @@ struct SettingsView: View {
     @State private var toolchainMessage = ""
     @State private var swiftModulesOverlaid = ToolchainManager.shared.isSwiftModulesOverlaid
     @State private var isOverlayingModules = false
+    @State private var sysrootInstalled = ToolchainManager.shared.isSysrootInstalled
+    @State private var isInstallingSysroot = false
     @State private var showImporter = false
     @State private var isImporting = false
 
@@ -120,6 +122,25 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                    HStack {
+                        Text("系統函式庫（sysroot）")
+                        Spacer()
+                        Text(sysrootInstalled ? "已安裝" : "未安裝")
+                            .foregroundColor(sysrootInstalled ? .green : .orange)
+                    }
+                    if !isInstallingSysroot {
+                        Button(sysrootInstalled ? "重新安裝系統函式庫" : "安裝系統函式庫") {
+                            installSysroot()
+                        }
+                        Text("連結器讀不了 SDK 的 .tbd，系統函式庫在裝置上又只有 dyld 快取裡有；這一包是從 iOS 15.8.5 固件抽出的真 dylib 副本（約 36MB），裝進 SDK 目錄供連結使用")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    if isInstallingSysroot {
+                        Text("安裝中…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 Section(header: Text("關於")) {
                     HStack {
@@ -211,6 +232,26 @@ struct SettingsView: View {
                     DispatchQueue.main.async {
                         isOverlayingModules = false
                         toolchainMessage = "疊加失敗：\(error.localizedDescription)"
+                    }
+                }
+            }
+        )
+    }
+
+    private func installSysroot() {
+        isInstallingSysroot = true
+        toolchainMessage = "下載系統函式庫中…"
+        ToolchainManager.shared.downloadSysroot(
+            onProgress: { _ in },
+            completion: { result in
+                DispatchQueue.main.async {
+                    isInstallingSysroot = false
+                    sysrootInstalled = ToolchainManager.shared.isSysrootInstalled
+                    switch result {
+                    case .success:
+                        toolchainMessage = sysrootInstalled ? "系統函式庫安裝完成" : "安裝完成但驗證未過，請回報"
+                    case .failure(let error):
+                        toolchainMessage = "系統函式庫安裝失敗：\(error.localizedDescription)"
                     }
                 }
             }

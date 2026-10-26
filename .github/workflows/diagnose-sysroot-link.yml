@@ -1,0 +1,72 @@
+name: diagnose-sysroot-link
+
+# 主機驗證：sysroot 包（iOS 15.8.5 真 dylib 副本）＋新連結配方。
+# 裝置 lld 讀不了 .tbd（真機實證讀空／unhandled file type），/usr/lib
+# 真身又只在 dyld 快取裡開不到——改連 sysroot 副本。本 workflow 在
+# 主機以 Xcode ld 驗證：副本文件完好可作連結輸入、配方（顯式主庫＋
+# 雙 -syslibroot＋-L）能把傘庫 reexport 解析通。另跑一支不帶第二
+# -syslibroot 的對照，看 reexport 解析是否依賴它。
+on:
+  workflow_dispatch:
+
+jobs:
+  sysroot-link:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Assemble SDK + overlays + sysroot
+        run: |
+          set -e
+          mkdir -p /tmp/sdkroot /tmp/work
+          curl -fL -o /tmp/sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
+          unzip -q /tmp/sdk.zip -d /tmp/sdkroot
+          SDK=$(echo /tmp/sdkroot/iPhoneOS*.sdk)
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+          curl -fL -o /tmp/mods.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5/swift-toolchain-modules.zip"
+          mkdir -p /tmp/mods && unzip -q /tmp/mods.zip -d /tmp/mods
+          # 帶二進制的模塊：清接口＋整目錄替換（與 App 149a56ae 一致）
+          for d in /tmp/mods/swift-stdlib-ios/*.swiftmodule; do
+            name=$(basename "$d")
+            if [ -f "$d/arm64-apple-ios.swiftmodule" ]; then
+              rm -f "$d"/*.swiftinterface
+              rm -rf "$SDK/usr/lib/swift/$name"
+            fi
+          done
+          cp -R /tmp/mods/swift-stdlib-ios/. "$SDK/usr/lib/swift/"
+          # sysroot：從正式 release 下載（與 App 裝的同一份字節）
+          curl -fL -o /tmp/sysroot.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/sysroot-ios15/paxidx-sysroot-ios15.zip"
+          mkdir -p "$SDK/paxidx-sysroot"
+          unzip -q /tmp/sysroot.zip -d "$SDK/paxidx-sysroot"
+          echo "SYSROOT=$SDK/paxidx-sysroot" >> "$GITHUB_ENV"
+          ls "$SDK/paxidx-sysroot/usr/lib" | head
+      - name: Compile objects (host swiftc 6.2.4 + clang)
+        run: |
+          set -e
+          cd /tmp/work
+          printf 'public func hello() {\n    print("Hello")\n}\n' > a.swift
+          printf '#include <stdio.h>\nint main(void) { printf("hi\\n"); return 0; }\n' > main.c
+          SW=$(find /tmp/mods -name 'swiftc' -o -name 'swift-frontend' 2>/dev/null | head -1)
+          # 用工具鏈 release 裡的前端：解 dylib 包拿不到前端；改用 runner 內建 swift（版本僅影響物件形狀，不影響連結驗證目的）
+          xcrun swiftc -target arm64-apple-ios15.0 -sdk "$SDK" -resource-dir "$SDK/usr/lib/swift" -enable-objc-interop -parse-as-library -emit-object a.swift -o a.o
+          xcrun clang -target arm64-apple-ios15.0 -isysroot "$SDK" -c main.c -o main.o
+          # FORCE_LOAD 替身（橋接同款 275 字節物件的等價物）
+          printf '.private_extern ___swift_FORCE_LOAD_$_swiftCompatibility56\n.globl ___swift_FORCE_LOAD_$_swiftCompatibility56\n___swift_FORCE_LOAD_$_swiftCompatibility56:\n' | xcrun clang -target arm64-apple-ios15.0 -x assembler - -c -o stub.o
+          ls -la
+      - name: Link with sysroot recipe (Xcode ld)
+        run: |
+          cd /tmp/work
+          SYS="$SYSROOT"
+          COMMON="-arch arm64 -platform_version ios 15.0 18.5 -syslibroot $SDK -L $SYS/usr/lib/swift -L $SYS/usr/lib $SYS/usr/lib/libSystem.B.dylib $SYS/usr/lib/swift/libswiftCore.dylib $SYS/usr/lib/swift/libswift_Concurrency.dylib $SYS/usr/lib/swift/libswiftSwiftOnoneSupport.dylib $SYS/usr/lib/libobjc.A.dylib a.o main.o stub.o"
+          echo "##### recipe A: WITH second -syslibroot"
+          set +e
+          xcrun ld $COMMON -syslibroot "$SYS" -o TestA
+          echo "A exit=$?"
+          set -e
+          if [ -f TestA ]; then otool -L TestA; fi
+          echo "##### recipe B: WITHOUT second -syslibroot"
+          set +e
+          xcrun ld $COMMON -o TestB
+          echo "B exit=$?"
+          set -e
+          if [ -f TestB ]; then otool -L TestB; fi
+          echo "##### sysroot link diagnosis done"
