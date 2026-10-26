@@ -271,6 +271,29 @@ jobs:
           done < /tmp/harvested.txt
           echo "load test passed: all harvested binaries accepted, zero rebuilds"
 
+      - name: Device-flag compile test (bridge-exact args, emit-object)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # 真機 #68 疊加修好後編 Foundation 仍 rc=1、約 10 秒靜默失敗，
+          # 而本 workflow 的 typecheck 載入測試全過（fcache2 零重建）——
+          # 兩邊剩餘差異是橋接的參數集：裝置帶 -resource-dir 指 SDK 的
+          # usr/lib/swift、-parse-as-library、-emit-object，且走出物件檔
+          # 而非只 typecheck。這一步在已裝好二進制的同一份 SDK 上用
+          # 橋接的一模一樣參數真編一次，主機上診斷可見，失敗即現形。
+          rm -rf /tmp/fcache3
+          "$STAGE_FE" -frontend -emit-object /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_DIR" \
+            -resource-dir "$SDK_DIR/usr/lib/swift" \
+            -module-cache-path /tmp/fcache3 \
+            -Xcc -fmodules-cache-path=/tmp/fcache3 \
+            -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5" \
+            -parse-as-library -enable-objc-interop \
+            -o /tmp/probe-deviceflags.o
+          ls -la /tmp/probe-deviceflags.o
+          echo "device-flag compile test passed"
+
       - name: Repack the modules package and upload
         shell: bash
         env:
