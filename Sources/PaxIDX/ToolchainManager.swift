@@ -248,9 +248,15 @@ final class ToolchainManager {
         guard let sdk = SDKManager.shared.sdkPath else { return false }
         let clangDir = sdk.appendingPathComponent("usr/lib/clang", isDirectory: true)
         guard let versions = try? FileManager.default.contentsOfDirectory(atPath: clangDir.path) else { return false }
-        return versions.contains {
+        let mainInPlace = versions.contains {
             FileManager.default.fileExists(atPath: clangDir.appendingPathComponent("\($0)/include/stdarg.h").path)
         }
+        // 還要 usr/lib/swift/clang/ 的工具鏈佈局鏡像在位（見下載函數註釋：
+        // 缺它 import Foundation 會死在 _Builtin_float）。舊安裝只有主目錄
+        // 時回報未裝，引導重跑一次下載補上鏡像。
+        let mirrorInPlace = FileManager.default.fileExists(
+            atPath: sdk.appendingPathComponent("usr/lib/swift/clang/include/stdarg.h").path)
+        return mainInPlace && mirrorInPlace
     }
 
     /// 下載 Clang 內建頭文件包，疊加到 SDK 的 usr/lib/clang
@@ -312,6 +318,24 @@ final class ToolchainManager {
                     }
                     for v in versionDirs {
                         try self.overlayCopy(from: srcDir.appendingPathComponent(v, isDirectory: true), to: destDir)
+                    }
+                    // 同一份 include 再鏡像到 usr/lib/swift/clang/——真工具鏈的
+                    // 資源佈局。橋接給前端傳 -resource-dir <sdk>/usr/lib/swift，
+                    // 前端在接口子編譯裡按 <resource-dir>/clang/ 找 clang 內建
+                    // 模塊（float.h 的 modulemap 等）；SDK 把頭文件只放在
+                    // usr/lib/clang/ 底下時，_Builtin_float 這類墊片模塊的子
+                    // 編譯報 underlying Objective-C module not found，整份
+                    // Foundation 編譯靜默 rc=1（CI #12–#15 A/B/C 實證：A 橋接
+                    // 原樣 exit=1、C 補上這棵樹後 exit=0 產出物件檔）。
+                    // clang/include 與 clang/19.1.5/include 兩種佈局都寫。
+                    let swiftClangBase = sdk.appendingPathComponent("usr/lib/swift/clang", isDirectory: true)
+                    try? fm.removeItem(at: swiftClangBase)
+                    let includeSrc = destDir.appendingPathComponent("include", isDirectory: true)
+                    if fm.fileExists(atPath: includeSrc.path) {
+                        try self.overlayCopy(from: includeSrc,
+                                             to: swiftClangBase.appendingPathComponent("include", isDirectory: true))
+                        try self.overlayCopy(from: includeSrc,
+                                             to: swiftClangBase.appendingPathComponent("19.1.5/include", isDirectory: true))
                     }
                     try? FileManager.default.removeItem(at: stage)
                     completion(.success(()))
