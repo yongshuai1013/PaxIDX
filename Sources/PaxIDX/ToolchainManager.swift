@@ -149,6 +149,19 @@ final class ToolchainManager {
     /// SDK 底包的 stdlib 接口是 Apple Swift 6.1.2 編的，我們的 6.2.4 前端拒讀
     /// （"this SDK is not supported by the compiler"）；換成前端自己生成的
     /// 6.2.4 接口後版本才對得上——Nyxian 的獨立資源目錄是同一回事。
+    /// 刪掉 SDK 裡的 libxml 分身樹（usr/include/libxml/）：這份 SDK 同時有
+    /// 正版 usr/include/libxml2/ 與一整棵複製到 libxml/ 的分身，兩邊的
+    /// modulemap 都宣告 module libxml2，clang 建模塊時 redefinition。
+    /// Nyxian 原版 SDK 無分身、CI 組裝副本也一律刪（framework workflow
+    /// #4 探針唯一真錯即它）。裝置 SDK 從底包解出後從沒刪過：Foundation
+    /// 的 clang 模塊傘頭含 NSXMLParser.h、一建就撞它，而子編譯錯誤在
+    /// 裝置上不進可見通道，只剩靜默 rc=1——主機 C 案過、裝置不過的主因。
+    /// 冪等：沒有就跳過。
+    func removeLibxmlTwin(in sdk: URL) {
+        let twin = sdk.appendingPathComponent("usr/include/libxml", isDirectory: true)
+        try? FileManager.default.removeItem(at: twin)
+    }
+
     func downloadSwiftModules(
         onProgress: @escaping (Double) -> Void,
         completion: @escaping (Result<Void, Error>) -> Void
@@ -164,6 +177,7 @@ final class ToolchainManager {
                 userInfo: [NSLocalizedDescriptionKey: "請先下載 SDK，再疊加 Swift 模塊"])))
             return
         }
+        removeLibxmlTwin(in: sdk)
         downloadFile(from: url, tempName: "swift-modules.zip", onProgress: onProgress) { result in
             switch result {
             case .success(let fileURL):
