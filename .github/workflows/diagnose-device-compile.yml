@@ -109,3 +109,39 @@ jobs:
           echo "--- E6 swift modules built into cache:"
           ls /tmp/cache-e6 | grep '\.swiftmodule$' || echo "(none)"
           ls -la /tmp/e6/newfile.o || echo "--- E6 NO object"
+
+      - name: E7 - inspect object autolink options and trial-link with the proper recipe
+        shell: bash
+        run: |
+          set -uxo pipefail
+          echo "=== E7a linker options recorded in newfile.o (autolink):"
+          otool -l /tmp/e6/newfile.o | grep -A6 'LC_LINKER_OPTION' || echo "(no LC_LINKER_OPTION found by grep)"
+          echo "--- E7a raw strings around swift lib names in newfile.o:"
+          strings /tmp/e6/newfile.o | grep -E '^-l|swift' | sort -u | head -40
+          mkdir -p /tmp/e7/tbd
+          cat > /tmp/e7/tbd/libswiftCompatibility56.tbd <<'TBD'
+          --- !tapi-tbd
+          tbd-version:     4
+          targets:         [ arm64-ios ]
+          install-name:    '/usr/lib/swift/libswiftCompatibility56.dylib'
+          exports:
+            - targets:         [ arm64-ios ]
+              symbols:         [ __swift_FORCE_LOAD_$_swiftCompatibility56 ]
+          TBD
+          printf 'int main(void){return 0;}\n' > /tmp/e7/main.c
+          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e7/main.c -o /tmp/e7/main.o || echo "E7 main.o compile failed"
+          echo "=== E7b V1: full recipe (-lSystem -lswiftCore + weak compat56 via synthesized tbd)"
+          ld -o /tmp/e7/TestV1 /tmp/e6/newfile.o /tmp/e7/main.o \
+            -arch arm64 -platform_version ios 15.0 18.5 \
+            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" -L/tmp/e7/tbd \
+            -lSystem -lswiftCore -weak-lswiftCompatibility56 > /tmp/out-v1.txt 2>&1
+          echo "V1 exit=$?"; cat /tmp/out-v1.txt
+          echo "--- V1 load commands:"; otool -L /tmp/e7/TestV1 || echo "(no V1 output)"
+          echo "--- V1 still-undefined:"; nm -u /tmp/e7/TestV1 2>/dev/null || true
+          echo "=== E7c V2: no compat56 handling at all (see what the link demands)"
+          ld -o /tmp/e7/TestV2 /tmp/e6/newfile.o /tmp/e7/main.o \
+            -arch arm64 -platform_version ios 15.0 18.5 \
+            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
+            -lSystem -lswiftCore > /tmp/out-v2.txt 2>&1
+          echo "V2 exit=$?"; cat /tmp/out-v2.txt
+          echo "--- V2 load commands:"; otool -L /tmp/e7/TestV2 || echo "(no V2 output)"
