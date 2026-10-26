@@ -110,34 +110,34 @@ jobs:
           ls /tmp/cache-e6 | grep '\.swiftmodule$' || echo "(none)"
           ls -la /tmp/e6/newfile.o || echo "--- E6 NO object"
 
-      - name: E9 - stub-object link with the func-shaped Swift source (device Test.ipa shape)
+      - name: E10 - production-shape link (library-mode object + stub + recipe)
         shell: bash
         run: |
           set -uxo pipefail
-          mkdir -p /tmp/e9
-          printf 'func hello() { print("Hello") }\n' > /tmp/e9/newfile.swift
-          rm -rf /tmp/cache-e9 && mkdir -p /tmp/cache-e9
+          mkdir -p /tmp/e10
+          printf 'func hello() { print("Hello") }\n' > /tmp/e10/newfile.swift
+          rm -rf /tmp/cache-e10 && mkdir -p /tmp/cache-e10
           FE=0
-          "$HOST_FRONTEND" -frontend -c /tmp/e9/newfile.swift \
-            -module-cache-path /tmp/cache-e9 \
-            -Xcc -fmodules-cache-path=/tmp/cache-e9 \
+          "$HOST_FRONTEND" -frontend -c /tmp/e10/newfile.swift \
+            -module-cache-path /tmp/cache-e10 \
+            -Xcc -fmodules-cache-path=/tmp/cache-e10 \
             -target arm64-apple-ios15.0 \
             -sdk "$SDKROOT" \
             -resource-dir "$SDKROOT/usr/lib/swift" \
             -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
-            -enable-objc-interop -emit-object \
-            -o /tmp/e9/newfile.o > /tmp/out-e9c.txt 2>&1 || FE=$?
-          echo "=== E9 compile exit=$FE"; ls -la /tmp/e9/newfile.o || echo "E9 NO object"
-          printf 'int main(void){return 0;}\n' > /tmp/e9/main.c
-          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e9/main.c -o /tmp/e9/main.o || echo "E9 main.o failed"
-          echo 'z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAADQAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAA2AAAAAEAAADoAAAAKwAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdENvbXBhdGliaWxpdHk1NgA=' | base64 -d > /tmp/e9/stub.o
+            -enable-objc-interop -parse-as-library -emit-object \
+            -o /tmp/e10/newfile.o > /tmp/out-e10c.txt 2>&1 || FE=$?
+          echo "=== E10 compile exit=$FE"; ls -la /tmp/e10/newfile.o || echo "E10 NO object"
+          printf 'int main(void){return 0;}\n' > /tmp/e10/main.c
+          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e10/main.c -o /tmp/e10/main.o || echo "E10 main.o failed"
+          echo 'z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAADQAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAA2AAAAAEAAADoAAAAKwAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdENvbXBhdGliaWxpdHk1NgA=' | base64 -d > /tmp/e10/stub.o
           V=0
-          ld -o /tmp/e9/Test /tmp/e9/newfile.o /tmp/e9/main.o /tmp/e9/stub.o \
+          ld -o /tmp/e10/Test /tmp/e10/newfile.o /tmp/e10/main.o /tmp/e10/stub.o \
             -arch arm64 -platform_version ios 15.0 18.5 \
             -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
-            -lSystem -lswiftCore > /tmp/out-e9.txt 2>&1 || V=$?
-          echo "=== E9 link exit=$V"; cat /tmp/out-e9.txt
-          echo "--- E9 load commands (otool -L):"; otool -L /tmp/e9/Test || echo "(no output)"
-          echo "--- E9 undefined left:"; (nm -u /tmp/e9/Test) || true
-          echo "--- E9 entry/build version:"; (otool -l /tmp/e9/Test | grep -A3 'LC_MAIN\|LC_BUILD_VERSION') || true
-          echo "=== E9 done"
+            -lSystem -lswiftCore > /tmp/out-e10.txt 2>&1 || V=$?
+          echo "=== E10 link exit=$V"; cat /tmp/out-e10.txt
+          echo "--- E10 load commands (otool -L):"; otool -L /tmp/e10/Test || echo "(no output)"
+          echo "--- E10 undefined left:"; (nm -u /tmp/e10/Test) || true
+          echo "--- E10 defined main:"; (nm /tmp/e10/Test | grep ' _main') || true
+          echo "=== E10 done"
