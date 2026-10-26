@@ -339,6 +339,33 @@ jobs:
             -o /tmp/probeA.o
           echo "variant A exit=$?"
           ls -la /tmp/probeA.o 2>/dev/null || true
+          echo "##### variant C: bridge-exact flags, but clang headers also under usr/lib/swift/clang (toolchain-resource layout)"
+          # #14 判決：A（橋接原樣）exit=1、B（拿掉 -resource-dir）exit=0。
+          # 但裝置上拿掉 -resource-dir 後前端的默認資源目錄落在 dylib 旁邊
+          # （App 包裡沒有資源樹），子調用未必找得到東西——主機 B 的成功
+          # 靠的是 stage 工具鏈自帶完整 lib/swift/clang。C 案驗另一條路：
+          # 旗標全照橋接，只把 clang 頭文件比照真工具鏈佈局補進
+          # usr/lib/swift/clang/（include 與 19.1.5/include 兩種佈局都放），
+          # 若 C 過，修法就是 App 裝 clang 頭時多寫一個目的地，橋接不動。
+          cp -R "$SDK_DIR/usr/lib/clang/19.1.5/include" "$SDK_DIR/usr/lib/swift/clang-include-tmp" 2>/dev/null || true
+          mkdir -p "$SDK_DIR/usr/lib/swift/clang"
+          cp -R "$SDK_DIR/usr/lib/clang/19.1.5/include" "$SDK_DIR/usr/lib/swift/clang/include"
+          mkdir -p "$SDK_DIR/usr/lib/swift/clang/19.1.5"
+          cp -R "$SDK_DIR/usr/lib/clang/19.1.5/include" "$SDK_DIR/usr/lib/swift/clang/19.1.5/include"
+          rm -rf "$SDK_DIR/usr/lib/swift/clang-include-tmp"
+          rm -rf /tmp/fcache5
+          "$STAGE_FE" -frontend -emit-object /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK_DIR" \
+            -resource-dir "$SDK_DIR/usr/lib/swift" \
+            -module-cache-path /tmp/fcache5 \
+            -Xcc -fmodules-cache-path=/tmp/fcache5 \
+            -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5" \
+            -parse-as-library -enable-objc-interop \
+            -module-name probe \
+            -o /tmp/probeC.o
+          echo "variant C exit=$?"
+          ls -la /tmp/probeC.o 2>/dev/null || true
           echo "##### variant B: same but WITHOUT -resource-dir"
           rm -rf /tmp/fcache4
           "$STAGE_FE" -frontend -emit-object /tmp/probe.swift \
