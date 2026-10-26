@@ -86,7 +86,7 @@ struct BuildView: View {
             }
             .background(Color(.systemBackground))
 
-            NavigationLink(destination: BuildLogView(log: buildLog), isActive: $showLog) {
+            NavigationLink(destination: BuildLogView(log: $buildLog), isActive: $showLog) {
                 EmptyView()
             }
         }
@@ -383,7 +383,12 @@ struct BuildView: View {
 
 /// 編譯日誌頁：整頁顯示，方便截圖
 struct BuildLogView: View {
-    let log: String
+    // 必須是 Binding 而非值拷貝：值拷貝會凍結在點進頁面那一刻的快照，
+    // 編譯在背景跑完後的失敗行與前端診斷永遠進不了這一頁（匯出的
+    // paxidx-build 日誌同理只有階段清單）——2026-10-26 晚真機實證：
+    // 使用者在編譯中途點進日誌頁，之後兩輪編譯其實已 rc=1 失敗、
+    // 診斷也已回傳，日誌頁卻一直停在「編譯 newfile.swift...」。
+    @Binding var log: String
     @State private var showShare = false
     @State private var logURL: URL?
 
