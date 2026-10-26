@@ -606,6 +606,22 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
             owned.push_back(sysLib);
         }
     }
+    // 框架真身（存在才加）：Foundation／CoreFoundation 的類與 Swift 覆寫
+    // 層符號在 SDK 裡只有 .tbd（裝置 lld 讀空），而 autolink 的 -framework
+    // 搜尋會先撞 SDK 的 System/Library/Frameworks（.tbd 在那裡）——比照
+    // libSystem 的定案做法，sysroot 里有真身就顯式傳絕對路徑。真身由
+    // 附加包 paxidx-sysroot-frameworks-ios15 裝進 sysroot 的
+    // System/Library/Frameworks/（與 usr/lib 的 26 支閉包函式庫一起，
+    // -L 與 re-export 解析都指得回來）；其 LC_ID_DYLIB 是系統原名，
+    // 產物運行時用裝置正版。
+    for (const std::string &rel : {"/System/Library/Frameworks/Foundation.framework/Foundation",
+                                   "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"}) {
+        std::string fwLib = sysroot + rel;
+        if (FILE *f = fopen(fwLib.c_str(), "rb")) {
+            fclose(f);
+            owned.push_back(fwLib);
+        }
+    }
     // libswiftCompatibility56 的佔位符號：6.2.4 標準庫令每個 Swift 目標
     // 文件引用 __swift_FORCE_LOAD_$_swiftCompatibility56（逼連結器拉入該
     // 庫的佔位變量，無人解引用），但設備端 SDK 沒有這支庫的 .tbd、iOS 15

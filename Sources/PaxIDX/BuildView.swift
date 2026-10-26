@@ -178,7 +178,10 @@ struct BuildView: View {
         _ args: [String],
         _ fn: (Int32, UnsafePointer<UnsafePointer<CChar>?>?, UnsafeMutablePointer<CChar>?, Int) -> Int32
     ) -> (Int32, String) {
-        var diagBuf = [CChar](repeating: 0, count: 8192)
+        // 8192 原本夠用，直到 sysroot 的 36 支函式庫每支噴一條版本警告
+        // （約 355 位元組×36＞12KB）把緩衝灌滿、真正的鏈接錯誤被截斷丟失
+        // （2026-10-26 真機實證：日誌斷在警告中段、錯誤一條都沒留下）。
+        var diagBuf = [CChar](repeating: 0, count: 262144)
         let rc: Int32 = diagBuf.withUnsafeMutableBufferPointer { dptr in
             args.withCStrings { argc, argv in
                 fn(argc, argv, dptr.baseAddress, dptr.count)

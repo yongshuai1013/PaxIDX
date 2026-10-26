@@ -366,6 +366,7 @@ final class ToolchainManager {
 
     private let sysrootReleaseTag = "sysroot-ios15"
     private let sysrootAssetName = "paxidx-sysroot-ios15.zip"
+    private let sysrootFrameworksAssetName = "paxidx-sysroot-frameworks-ios15.zip"
 
     /// sysroot 在 SDK 目錄內的安裝點（橋接層連結時按此相對位置找，見
     /// ToolchainDylibImpl 的 paxidx_dylib_ld_link）
@@ -379,8 +380,11 @@ final class ToolchainManager {
         guard let sdk = SDKManager.shared.sdkPath else { return false }
         let root = Self.sysrootDir(in: sdk)
         let fm = FileManager.default
+        // 框架附加包也要在位：Foundation 真身缺了的話 import Foundation
+        // 的程序編得過、鏈接必死（SDK 只有 .tbd、裝置 lld 讀空）。
         return fm.fileExists(atPath: root.appendingPathComponent("usr/lib/libSystem.B.dylib").path)
             && fm.fileExists(atPath: root.appendingPathComponent("usr/lib/swift/libswiftCore.dylib").path)
+            && fm.fileExists(atPath: root.appendingPathComponent("System/Library/Frameworks/Foundation.framework/Foundation").path)
     }
 
     /// 下載 iOS 15.8.5 系統函式庫包（真 dylib，從固件 dyld 快取抽出），
@@ -422,6 +426,48 @@ final class ToolchainManager {
                     try? FileManager.default.removeItem(at: dest)
                     try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
                     try FileManager.default.moveItem(at: stagedUsr, to: dest.appendingPathComponent("usr", isDirectory: true))
+                    try? FileManager.default.removeItem(at: stage)
+                    // 主包裝完接著裝框架附加包（Foundation／CoreFoundation
+                    // 真身＋26 支閉包）：同一個 sysroot 目錄、zip 內就是
+                    // System/... 與 usr/... 的鏡像路徑，整棵疊加進去。
+                    self.installSysrootFrameworks(sdk: sdk, onProgress: onProgress, completion: completion)
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// 下載並安裝 sysroot 框架附加包到既有 sysroot 目錄（由 downloadSysroot
+    /// 在主包之後串接呼叫；單獨重跑 downloadSysroot 會整目錄重裝、兩包都補）
+    private func installSysrootFrameworks(
+        sdk: URL,
+        onProgress: @escaping (Double) -> Void,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let urlString = "https://github.com/yongshuai1013/PaxIDX/releases/download/\(sysrootReleaseTag)/\(sysrootFrameworksAssetName)"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(NSError(domain: "ToolchainManager", code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "框架附加包下載地址無效"])))
+            return
+        }
+        downloadFile(from: url, tempName: "sysroot-frameworks.zip", onProgress: onProgress) { result in
+            switch result {
+            case .success(let fileURL):
+                do {
+                    let stage = self.containerURL.appendingPathComponent("__sysroot_fw_stage__", isDirectory: true)
+                    try? FileManager.default.removeItem(at: stage)
+                    try self.extract(zip: fileURL, to: stage)
+                    try? FileManager.default.removeItem(at: fileURL)
+                    let stagedFw = stage.appendingPathComponent("System/Library/Frameworks/Foundation.framework/Foundation")
+                    guard FileManager.default.fileExists(atPath: stagedFw.path) else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "框架附加包結構不對：缺 Foundation"])
+                    }
+                    let dest = Self.sysrootDir(in: sdk)
+                    try self.overlayCopy(from: stage, to: dest)
                     try? FileManager.default.removeItem(at: stage)
                     guard self.isSysrootInstalled else {
                         throw NSError(domain: "ToolchainManager", code: -3,

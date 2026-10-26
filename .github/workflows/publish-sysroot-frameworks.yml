@@ -1,0 +1,40 @@
+name: publish-sysroot-frameworks
+
+# 一次性：把 sysroot 框架附加包（Foundation／CoreFoundation 真身＋26 支
+# 閉包函式庫）發佈到 sysroot-ios15 release（與主包同一 release）。
+# 互動端憑證只能打 api.github.com、上傳資產要 uploads.github.com，
+# 故借 Actions 的 GITHUB_TOKEN 完成上傳；zip 本體經暫時連結下載。
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "frameworks zip 的下載連結"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Download zip and upload as release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZIP_URL: ${{ inputs.url }}
+        run: |
+          set -e
+          curl -fL -o paxidx-sysroot-frameworks-ios15.zip "$ZIP_URL"
+          ls -la paxidx-sysroot-frameworks-ios15.zip
+          python3 -c "
+          import zipfile
+          z = zipfile.ZipFile('paxidx-sysroot-frameworks-ios15.zip')
+          names = z.namelist()
+          assert 'System/Library/Frameworks/Foundation.framework/Foundation' in names, names[:5]
+          assert 'System/Library/Frameworks/CoreFoundation.framework/CoreFoundation' in names
+          assert 'usr/lib/libicucore.A.dylib' in names
+          print('zip ok, entries:', len(names))
+          "
+          gh release upload sysroot-ios15 paxidx-sysroot-frameworks-ios15.zip --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view sysroot-ios15 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size)"'
