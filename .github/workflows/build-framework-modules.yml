@@ -179,6 +179,25 @@ jobs:
           }
           SWIFT
           rm -rf /tmp/fcache
+          # 二進制已在包裡時跳過重建探針（#9 實證）：組裝步會把現行包的
+          # 二進制疊進 SDK（接口被清掉），此時探針要從 Foundation 接口
+          # 重建整串，圖中間的 CoreFoundation 只剩二進制、顯式重建要讀
+          # 它的接口而報 No such file——那是組裝狀態的假象，不是包壞了。
+          # 改為直接從組裝好的 SDK 掃現成二進制收割，後面的載入測試與
+          # 裝置參數真編才是真閘門。Swift／_Concurrency／SwiftOnoneSupport
+          # 歸 stdlib 包管理，不在此收割。
+          if [ -f "$SDK_DIR/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule/arm64-apple-ios.swiftmodule" ]; then
+            echo "binaries already present — skipping rebuild probe, harvesting from assembled SDK"
+            : > /tmp/harvested_raw.txt
+            find "$SDK_DIR/usr/lib/swift" "$SDK_DIR/System/Library/Frameworks" -type f -name 'arm64-apple-ios.swiftmodule' | while read -r f; do
+              mod="$(basename "$(dirname "$f")" .swiftmodule)"
+              case "$mod" in Swift|_Concurrency|SwiftOnoneSupport) continue;; esac
+              echo "$mod $f" >> /tmp/harvested_raw.txt
+            done
+            sort -u /tmp/harvested_raw.txt -o /tmp/harvested_raw.txt
+            cat /tmp/harvested_raw.txt
+            exit 0
+          fi
           # 直調前端、不走 driver：driver 會先做 SDK 支援檢查，拿 6.1.2
           # 世代的 SDK 餵 6.2.4 編譯器直接被拒（this SDK is not supported）；
           # 裝置橋接調的也是前端本體、沒有這道檢查（#1 實證）。-Xcc
