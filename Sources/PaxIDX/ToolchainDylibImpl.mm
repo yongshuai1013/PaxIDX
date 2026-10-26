@@ -391,12 +391,19 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
         // 不存在就不傳，退回默認行為（至少 pure Swift 能用）
     }
     // 對齊 Nyxian 的 Swift 參數配方（NXSwiftFlagsForCodeTemplateLanguage）：
-    // 開 ObjC 互通，前端才能 import Foundation/UIKit 這類 ObjC 框架；
-    // -parse-as-library 讓 @main／頂層代碼按庫模式解析（App 類專案同款）。
+    // 開 ObjC 互通，前端才能 import Foundation/UIKit 這類 ObjC 框架。
     // 注意：performFrontend 直接吃前端參數，不能帶 -Xfrontend——那是 driver
     // 層的轉發語法，前端本體會報 unknown argument（2026-10-21 真機實測證實）。
-    owned.push_back("-enable-objc-interop");
+    // -parse-as-library 保留（2026-10-26 定案）：逐文件編譯時每個文件都
+    // 按庫文件編，才不會個個都合成一個 _main（CI E9 主機實證：拿掉旗標
+    // 後連純函數文件也被當成主文件、與 C 的 main 在連結時重複定義）。
+    // 代價是頂層代碼文件（App 模板的 print("Hello")）會被這旗標擋下
+    // （"expressions are not allowed at the top level"，裝 #57 前的靜默
+    // rc=1 即此故）——解法在下方 M4b：首次編譯若正是死在這句診斷，就
+    // 拿掉旗標、只把這個文件按主文件重編一次。頂層文件合成 _main 後
+    // 與 C 的 main 衝突與否，回到 App 既有的「進入點只能留一個」規則。
     owned.push_back("-parse-as-library");
+    owned.push_back("-enable-objc-interop");
     owned.push_back("-emit-object");
     owned.push_back("-o"); owned.push_back(output);
     owned.push_back(src);
@@ -425,8 +432,9 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                     std::to_string(paxidxFootprintBytes() / (1024 * 1024)));
     initSwiftModulesOnce();
     llvm::remove_fatal_error_handler();
-    int result;
+    int result = 0;
     std::string captured;
+    auto runFrontend = [&](const std::vector<const char *> &a) {
     {
         struct sigaction sa {};
         sa.sa_sigaction = paxidxCrashHandler;
@@ -451,7 +459,7 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
         StderrCapture cap(docsDir);
         paxidxDebugNote("M3 calling performFrontend");
         result = swift::performFrontend(
-            llvm::ArrayRef<const char *>(args.data(), args.size()),
+            llvm::ArrayRef<const char *>(a.data(), a.size()),
             "swift-frontend", nullptr, nullptr);
         captured = cap.finish();
     }
@@ -459,6 +467,18 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     llvm::install_fatal_error_handler(paxidxLLVMFatalHandler);
     paxidxDebugNote("M4 performFrontend returned rc=" + std::to_string(result) +
                     " captured_bytes=" + std::to_string(captured.size()));
+    };
+    runFrontend(args);
+    if (result != 0 &&
+        captured.find("not allowed at the top level") != std::string::npos) {
+        // 頂層代碼文件被 -parse-as-library 擋下：拿掉旗標、按主文件重編一次。
+        std::vector<const char *> retryArgs;
+        for (const char *a : args)
+            if (std::strcmp(a, "-parse-as-library") != 0)
+                retryArgs.push_back(a);
+        paxidxDebugNote("M4b top-level code: retrying without -parse-as-library");
+        runFrontend(retryArgs);
+    }
     if (result != 0) {
         copyDiag(captured.empty()
                      ? "paxidx swift: 編譯失敗（stderr 無輸出）"
@@ -470,6 +490,30 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     return 0;
 }
 #endif // PAXIDX_HAS_SWIFT_FRONTEND
+
+// 手造替身目標文件（arm64 Mach-O relocatable，275 位元組）：僅定義
+// __swift_FORCE_LOAD_$_swiftCompatibility56 一個 __data 全域符號（8 位元組零）。
+// 由來與驗證見 paxidx_dylib_ld_link 內的連結註解。
+static const unsigned char kCompat56StubObject[] = {
+    0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x19, 0x00, 0x00, 0x00, 0x98, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5f, 0x5f, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5f, 0x5f, 0x44, 0x41, 0x54, 0x41, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0xd8, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0xe8, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5f, 0x5f, 0x73, 0x77, 0x69, 0x66, 0x74,
+    0x5f, 0x46, 0x4f, 0x52, 0x43, 0x45, 0x5f, 0x4c, 0x4f, 0x41, 0x44, 0x5f, 0x24, 0x5f, 0x73, 0x77,
+    0x69, 0x66, 0x74, 0x43, 0x6f, 0x6d, 0x70, 0x61, 0x74, 0x69, 0x62, 0x69, 0x6c, 0x69, 0x74, 0x79,
+    0x35, 0x36, 0x00,
+};
 
 extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
                               char *diagnostics, size_t diagnostics_capacity) {
@@ -501,11 +545,36 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
     owned.emplace_back(ver);
     owned.emplace_back("-syslibroot");
     owned.emplace_back(sdk);
-    // 不加 -lSystem：LLD 對 iOS 目標會自動連結 libSystem；
-    // 硬編碼 -lSystem 會讓 LLD 去讀 SDK 內的 .tbd 文本樁，解析失敗。
-    // SDK 的 .tbd 可能不全（如 ___darwin_fd_set），允許未定義符號，運行時由 iOS 的 libSystem 提供
-    owned.emplace_back("-undefined");
-    owned.emplace_back("dynamic_lookup");
+    // 正規連結（2026-10-26 定案）：產出執行檔必須自帶函式庫依賴，不再用
+    // -undefined dynamic_lookup。那種寫法一條 LC_LOAD_DYLIB 都不寫、全部
+    // 符號記成 flat-namespace 運行時查找，dyld 啟動時身邊只有主程序自己，
+    // 綁第一個符號就 abort（真機 Test.ipa＋.ips 實證：DYLD symbol not
+    // found in flat namespace (_swift_bridgeObjectRelease)；拆 IPA 證實
+    // 載入命令裡只有 /usr/lib/dyld 一條）。裸 ld64.lld 不會自動加
+    // libSystem（那是 clang driver 的行為），須明寫 -lSystem／-lswiftCore
+    // ——SDK 裡這兩個 .tbd 的 install name 都是絕對路徑 /usr/lib/...，
+    // 記入後 dyld 啟動直接載入系統那份，無需 rpath。-L 指到 SDK 的
+    // usr/lib/swift，讓目標文件自帶的 LC_LINKER_OPTION autolink
+    // （swift_Concurrency／swift_StringProcessing／objc 等）找得到 .tbd。
+    owned.emplace_back("-L");
+    owned.push_back(std::string(sdk) + "/usr/lib/swift");
+    owned.emplace_back("-lSystem");
+    owned.emplace_back("-lswiftCore");
+    // libswiftCompatibility56 的佔位符號：6.2.4 標準庫令每個 Swift 目標
+    // 文件引用 __swift_FORCE_LOAD_$_swiftCompatibility56（逼連結器拉入該
+    // 庫的佔位變量，無人解引用），但設備端 SDK 沒有這支庫的 .tbd、iOS 15
+    // 系統裡也沒有這支庫本體。隨連結附上一顆手造替身目標文件在本程序內
+    // 定義該符號（kCompat56StubObject，275 位元組，僅一個 __data 零值
+    // 全域；2026-10-26 CI E8/E10 以主機 ld 驗證可解析、可連結），連結
+    // 不記該庫的載入命令，運行時自然不會去找它。
+    {
+        std::string stubPath = std::string(exe) + ".paxidx-compat56-stub.o";
+        if (FILE *f = fopen(stubPath.c_str(), "wb")) {
+            fwrite(kCompat56StubObject, 1, sizeof(kCompat56StubObject), f);
+            fclose(f);
+            owned.push_back(stubPath);
+        }
+    }
 
     std::vector<const char *> lldArgs;
     lldArgs.reserve(owned.size());
