@@ -38,8 +38,9 @@ jobs:
           # 用工具鏈 release 裡的前端：解 dylib 包拿不到前端；改用 runner 內建 swift（版本僅影響物件形狀，不影響連結驗證目的）
           xcrun swiftc -target arm64-apple-ios15.0 -sdk "$SDK" -parse-as-library -emit-object a.swift -o a.o
           xcrun clang -target arm64-apple-ios15.0 -isysroot "$SDK" -c main.c -o main.o
-          # FORCE_LOAD 替身（橋接同款 275 字節物件的等價物）
-          printf '.private_extern ___swift_FORCE_LOAD_$_swiftCompatibility56\n.globl ___swift_FORCE_LOAD_$_swiftCompatibility56\n___swift_FORCE_LOAD_$_swiftCompatibility56:\n' | xcrun clang -target arm64-apple-ios15.0 -x assembler - -c -o stub.o
+          # FORCE_LOAD 替身：用 E10 驗證過的 275 字節真物件（base64），
+          # 不再用內聯匯編臨時拼（$ 處理會把標籤弄壞，#5 就是死在這）
+          echo 'z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAADQAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAA2AAAAAEAAADoAAAAKwAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdENvbXBhdGliaWxpdHk1NgA=' | base64 -d > stub.o
           ls -la
       - name: Link with sysroot recipe (Xcode ld)
         run: |
