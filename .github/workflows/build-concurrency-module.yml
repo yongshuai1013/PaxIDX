@@ -208,7 +208,8 @@ jobs:
                   out += ['-define-availability', twin]
           print('\n'.join(out))
           PYEOF
-          mapfile -t AVAIL_ARGS < /tmp/avail_args.txt
+          AVAIL_ARGS=()
+          while IFS= read -r line; do AVAIL_ARGS+=("$line"); done < /tmp/avail_args.txt
           echo "availability args: ${#AVAIL_ARGS[@]}"
           # 旗標對齊官方接口頭記錄的 swift-module-flags，只把 target 換成 ios15.0
           cd "$SRC"
