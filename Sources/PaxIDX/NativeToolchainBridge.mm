@@ -214,8 +214,7 @@ extern "C" int paxidx_swift_compile(int argc, const char * const *argv,
 // 內嵌的 CoreCompiler.framework（minos 已由 CI 改戳記為 15.0）用
 // dlopen(RTLD_NOW) 真載入一次，驗證 dyld 在 iOS 15 上的接受程度與
 // 全體初始化是否跑得完；再讀它導出的版本符號、並試載一支附屬
-// SwiftSyntax dylib。結果以多行文字寫入 buffer（
- 分隔）。
+// SwiftSyntax dylib。結果以多行文字寫入 buffer（換行分隔）。
 extern "C" int paxidx_nyx_dlopen_test(char *buffer, size_t capacity) {
     std::string report;
     auto line = [&](const std::string &t) { report += t; report += "\n"; };
