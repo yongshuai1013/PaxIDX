@@ -1,0 +1,98 @@
+# 在 CI 的 Mac 上按裝置端的真實模塊集與參數復現 PaxIDX 的 Swift 編譯，
+# 找出到底是哪個模塊在被「從接口現場建」時撞上 SILGen 崩潰。
+#
+# 背景（2026-10-26）：裝置端編 print("Hello") 必崩，符号化定案崩在子編譯
+# 實例從 .swiftinterface 現場建模塊的 SILGen。_Concurrency 補上自編 ios15
+# 二進制後真機仍同點崩（pid 626/631，永帥確認是重新疊加後編的）——兇手
+# 另有其模塊。SDK 本體是 iOS 18.5 SDK 的 6.1.2 接口集（全無二進制），
+# 疊加只換了 Swift／SwiftOnoneSupport／_Concurrency 三個；Swift 模塊的
+# 其餘依賴（如 _StringProcessing）仍是接口，嫌疑最大。本 workflow 把
+# 裝置的 SDK 組裝原樣搬到 Mac、用主機 6.2.4 前端按裝置 M2 參數編同一句
+# 代碼，看模塊緩存裡冒出哪些現場建產物、以及會不會同點崩。
+name: diagnose-device-compile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOOLCHAIN_TAG: toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5
+  SDK_TAG: darwin-sdk-1
+
+jobs:
+  diagnose:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Restore the host Swift 6.2.4 toolchain
+        id: host-swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: host-swift-toolchain
+          key: host-swift-6.2.4-osx-toolchain-v1
+
+      - name: Locate the host frontend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          TC_USR="$(dirname "$(dirname "$SWIFTC_PATH")")"
+          test -x "$TC_USR/bin/swift-frontend"
+          echo "HOST_FRONTEND=$TC_USR/bin/swift-frontend" >> "$GITHUB_ENV"
+
+      - name: Assemble the device-equivalent SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dl
+          gh release download "$SDK_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'paxidx-darwin-sdk.zip' --dir dl
+          gh release download "$TOOLCHAIN_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --pattern 'clang-resource-headers.zip' --dir dl
+          mkdir -p sdkroot
+          unzip -q dl/paxidx-darwin-sdk.zip -d sdkroot
+          SDKROOT="$PWD/sdkroot/iPhoneOS-fixed.sdk"
+          test -d "$SDKROOT"
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          # Clang 頭文件：照 App 的裝法（清空 usr/lib/clang、內容裝到 19.1.5）
+          mkdir -p /tmp/clang-h && unzip -q dl/clang-resource-headers.zip -d /tmp/clang-h
+          rm -rf "$SDKROOT/usr/lib/clang"
+          mkdir -p "$SDKROOT/usr/lib/clang/19.1.5"
+          cp -R /tmp/clang-h/clang-headers/19/. "$SDKROOT/usr/lib/clang/19.1.5/"
+          test -f "$SDKROOT/usr/lib/clang/19.1.5/include/stdarg.h"
+          # 模塊疊加：照 App 的 overlayCopy（swift-stdlib-ios 內容合併進 usr/lib/swift）
+          mkdir -p /tmp/mods && unzip -q dl/swift-toolchain-modules.zip -d /tmp/mods
+          cp -R /tmp/mods/swift-stdlib-ios/. "$SDKROOT/usr/lib/swift/"
+          echo "--- post-overlay _Concurrency dir:"
+          ls -la "$SDKROOT/usr/lib/swift/_Concurrency.swiftmodule/"
+          echo "--- SDK _StringProcessing interface head:"
+          head -3 "$SDKROOT/usr/lib/swift/_StringProcessing.swiftmodule/arm64-apple-ios.swiftinterface"
+
+      - name: Compile print("Hello") with the device's argument set
+        shell: bash
+        run: |
+          set -uxo pipefail
+          printf 'print("Hello")\n' > /tmp/newfile.swift
+          rm -rf /tmp/devcache
+          mkdir -p /tmp/devcache
+          "$HOST_FRONTEND" -frontend -c /tmp/newfile.swift \
+            -module-cache-path /tmp/devcache \
+            -Xcc -fmodules-cache-path=/tmp/devcache \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDKROOT" \
+            -resource-dir "$SDKROOT/usr/lib/swift" \
+            -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
+            -enable-objc-interop -parse-as-library -emit-object \
+            -o /tmp/newfile.o > /tmp/compile-out.txt 2>&1
+          echo "frontend exit code: $?"
+          echo "--- last 40 lines of output:"
+          tail -40 /tmp/compile-out.txt
+          echo "--- module cache contents (built-from-interface products land here):"
+          find /tmp/devcache -maxdepth 2 | sort
+          echo "--- object file:"
+          ls -la /tmp/newfile.o || echo "no object produced"
