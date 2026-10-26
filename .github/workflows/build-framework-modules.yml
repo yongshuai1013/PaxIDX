@@ -236,7 +236,11 @@ jobs:
         run: |
           set -euxo pipefail
           # 在組裝好的 SDK 上就地裝入收割產物（清接口＋整目錄替換，比照 App）
-          while read -r mod dest; do
+          # harvested.txt 的行格式是 "模塊 -> 目的地"：read 必須吃三欄、
+          # 第二欄是箭頭。#5 的教訓：只讀兩欄時 dest 會拿到 "->"，case
+          # 兩邊都不匹配、安裝迴圈靜默空轉，載入測試等於在未安裝的 SDK
+          # 上跑——那一輪的「二進制全數被拒」是這個解析 bug 的假象。
+          while read -r mod _arrow dest; do
             case "$dest" in
               harvest/swift-frameworks-ios/*)
                 rel="${dest#harvest/swift-frameworks-ios/}"
@@ -259,7 +263,7 @@ jobs:
             -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5"
           echo "=== cache2 (rebuilt again?) ==="
           find /tmp/fcache2 -name '*.swiftmodule' -type f | sort || true
-          while read -r mod dest; do
+          while read -r mod _arrow dest; do
             if find /tmp/fcache2 -name "$mod-*.swiftmodule" -o -name "$mod.swiftmodule" | grep -q .; then
               echo "::error::$mod 的二進制被拒、又被現場重建了"
               exit 1
