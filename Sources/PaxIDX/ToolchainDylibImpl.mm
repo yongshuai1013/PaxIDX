@@ -469,9 +469,12 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                     " captured_bytes=" + std::to_string(captured.size()));
     };
     runFrontend(args);
-    if (result != 0 &&
-        captured.find("not allowed at the top level") != std::string::npos) {
-        // 頂層代碼文件被 -parse-as-library 擋下：拿掉旗標、按主文件重編一次。
+    if (result != 0) {
+        // 首次編譯失敗就拿掉旗標、按主文件重編一次：頂層代碼文件正是
+        // 死在這裡（"expressions are not allowed at the top level"）。
+        // 不拿診斷文字當觸發條件——裝置上前端診斷從不進 StderrCapture
+        // （歷輪 rc=1 皆 captured_bytes=0，2026-10-26 再度實證），文字
+        // 條件永遠不成立；真錯誤的文件重編也會失敗、診斷照樣回報。
         std::vector<const char *> retryArgs;
         for (const char *a : args)
             if (std::strcmp(a, "-parse-as-library") != 0)
@@ -552,14 +555,26 @@ extern "C" int paxidx_dylib_ld_link(int argc, const char * const *argv,
     // found in flat namespace (_swift_bridgeObjectRelease)；拆 IPA 證實
     // 載入命令裡只有 /usr/lib/dyld 一條）。裸 ld64.lld 不會自動加
     // libSystem（那是 clang driver 的行為），須明寫 -lSystem／-lswiftCore
-    // ——SDK 裡這兩個 .tbd 的 install name 都是絕對路徑 /usr/lib/...，
-    // 記入後 dyld 啟動直接載入系統那份，無需 rpath。-L 指到 SDK 的
-    // usr/lib/swift，讓目標文件自帶的 LC_LINKER_OPTION autolink
-    // （swift_Concurrency／swift_StringProcessing／objc 等）找得到 .tbd。
-    owned.emplace_back("-L");
-    owned.push_back(std::string(sdk) + "/usr/lib/swift");
-    owned.emplace_back("-lSystem");
-    owned.emplace_back("-lswiftCore");
+    // ——但不能靠 -lSystem／-lswiftCore 去讀 SDK 的 .tbd：2026-10-26 真機
+    // 實證裝置端 lld 讀設備 SDK 的 .tbd 等於讀空（找得到文件、不報錯、
+    // 但一個符號都不貢獻，連 _printf 都未定義；主機 ld-prime 讀同一批
+    // .tbd 卻正常——是這支 lld 的 TextAPI 路徑與這批樁不合，舊註解裡
+    // 「讀 .tbd 解析失敗」即此）。改成把系統裡的真 dylib 按絕對路徑
+    // 直接當連結輸入：真 Mach-O 不經 TextAPI，其 LC_ID_DYLIB 本就是
+    // /usr/lib/... 絕對名，記入產物的正是系統那份，無需 rpath。
+    owned.emplace_back("/usr/lib/libSystem.B.dylib");
+    owned.emplace_back("/usr/lib/swift/libswiftCore.dylib");
+    // 以下三支是常用 autolink 目標的真身（存在才加）：並發運行時、
+    // -Onone 支援、ObjC 運行時。它們在 SDK 裡只有 .tbd（同樣讀空），
+    // 不給真身的話，將來用到 Task／@objc 的代碼會在這裡未定義。
+    for (const char *sysLib : {"/usr/lib/swift/libswift_Concurrency.dylib",
+                               "/usr/lib/swift/libswiftSwiftOnoneSupport.dylib",
+                               "/usr/lib/libobjc.A.dylib"}) {
+        if (FILE *f = fopen(sysLib, "rb")) {
+            fclose(f);
+            owned.emplace_back(sysLib);
+        }
+    }
     // libswiftCompatibility56 的佔位符號：6.2.4 標準庫令每個 Swift 目標
     // 文件引用 __swift_FORCE_LOAD_$_swiftCompatibility56（逼連結器拉入該
     // 庫的佔位變量，無人解引用），但設備端 SDK 沒有這支庫的 .tbd、iOS 15
