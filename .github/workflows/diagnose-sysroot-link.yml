@@ -47,7 +47,7 @@ jobs:
           printf '#include <stdio.h>\nint main(void) { printf("hi\\n"); return 0; }\n' > main.c
           SW=$(find /tmp/mods -name 'swiftc' -o -name 'swift-frontend' 2>/dev/null | head -1)
           # 用工具鏈 release 裡的前端：解 dylib 包拿不到前端；改用 runner 內建 swift（版本僅影響物件形狀，不影響連結驗證目的）
-          xcrun swiftc -target arm64-apple-ios15.0 -sdk "$SDK" -resource-dir "$SDK/usr/lib/swift" -enable-objc-interop -parse-as-library -emit-object a.swift -o a.o
+          xcrun swiftc -target arm64-apple-ios15.0 -sdk "$SDK" -parse-as-library -emit-object a.swift -o a.o
           xcrun clang -target arm64-apple-ios15.0 -isysroot "$SDK" -c main.c -o main.o
           # FORCE_LOAD 替身（橋接同款 275 字節物件的等價物）
           printf '.private_extern ___swift_FORCE_LOAD_$_swiftCompatibility56\n.globl ___swift_FORCE_LOAD_$_swiftCompatibility56\n___swift_FORCE_LOAD_$_swiftCompatibility56:\n' | xcrun clang -target arm64-apple-ios15.0 -x assembler - -c -o stub.o
