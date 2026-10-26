@@ -129,6 +129,13 @@ jobs:
           set -euxo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           echo "SDK=$SDK" >> "$GITHUB_ENV"
+          # 自訂 -resource-dir（stage-rd 只抄了 lib/swift）會讓前端推導不出
+          # Clang 資源目錄，內建頭（stdarg.h 等）缺失、Darwin 模塊建不起來
+          # ——run #2 實證。跟裝置端橋接層同款解法：明文傳 -Xcc -resource-dir。
+          CLANG_RD="$(dirname "$(ls -d "$HOST_TC_USR"/lib/clang/*/include | head -1)")"
+          test -f "$CLANG_RD/include/stdarg.h"
+          echo "CLANG_RD=$CLANG_RD" >> "$GITHUB_ENV"
+          echo "clang resource dir: $CLANG_RD"
           SRC="$SWIFTSRC/stdlib/public/Concurrency"
           mkdir -p out/_Concurrency.swiftmodule
           # 源码清單逐字對應 stdlib/public/Concurrency/CMakeLists.txt 的
@@ -179,6 +186,7 @@ jobs:
             -target arm64-apple-ios15.0 \
             -sdk "$SDK" \
             -resource-dir "$STAGE_RD" \
+            -Xcc -resource-dir -Xcc "$CLANG_RD" \
             -I "$SRC/InternalShims" \
             -parse-stdlib -swift-version 5 -O \
             -enable-library-evolution -enable-objc-interop \
@@ -228,6 +236,7 @@ jobs:
             -target arm64-apple-ios15.0 \
             -sdk "$SDK" \
             -resource-dir "$STAGE_RD" \
+            -Xcc -resource-dir -Xcc "$CLANG_RD" \
             -module-cache-path /tmp/verify-cache
           echo "module cache after typecheck:"
           ls /tmp/verify-cache || true
