@@ -311,6 +311,7 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
+          set +e
           set -uxo pipefail
           # 真機 #68 疊加修好後編 Foundation 仍 rc=1、約 10 秒靜默失敗，
           # 而本 workflow 的 typecheck 載入測試全過（fcache2 零重建）——
