@@ -425,6 +425,10 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
                         paxidxListDir(sdkStr + "/usr/lib/swift", 24));
         paxidxDebugNote("STAT sdk/usr/lib/clang: " +
                         paxidxListDir(sdkStr + "/usr/lib/clang", 8));
+        paxidxDebugNote("STAT sdk Foundation.swiftmodule: " +
+                        paxidxListDir(sdkStr + "/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule", 8));
+        paxidxDebugNote("STAT sdk CoreFoundation.swiftmodule: " +
+                        paxidxListDir(sdkStr + "/usr/lib/swift/CoreFoundation.swiftmodule", 8));
     }
     paxidxDebugNote("STAT Documents/Toolchain: " +
                     paxidxListDir(paxidxDocumentsDir() + "/Toolchain", 16));
@@ -467,6 +471,15 @@ extern "C" int paxidx_dylib_swift_compile(int argc, const char * const *argv,
     llvm::install_fatal_error_handler(paxidxLLVMFatalHandler);
     paxidxDebugNote("M4 performFrontend returned rc=" + std::to_string(result) +
                     " captured_bytes=" + std::to_string(captured.size()));
+    // 把抓到的 stderr 原文也寫進 debug 日誌（2026-10-26 晚加）：診斷本來
+    // 有經 diagnostics buffer 回 App 並寫入編譯日誌，但真機上編譯日誌裡
+    // 只剩「失敗（rc=1）」兩行、原文不知在哪一環丟失；debug 日誌是目前
+    // 唯一確定能匯出到手的通道，先讓原文在這裡落一份，兇手現形優先。
+    if (!captured.empty()) {
+        paxidxDebugNote("M4 captured stderr >>>");
+        paxidxDebugNote(captured);
+        paxidxDebugNote("<<< M4 captured stderr end");
+    }
     };
     runFrontend(args);
     if (result != 0) {
