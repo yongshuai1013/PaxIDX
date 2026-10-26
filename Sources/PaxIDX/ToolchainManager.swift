@@ -123,17 +123,18 @@ final class ToolchainManager {
         }
     }
 
-    /// Swift 標準庫模塊是否已完整疊加到 SDK（6.2.4 接口就位）
+    /// Swift 標準庫模塊是否已完整疊加到 SDK（6.2.4 二進制就位）
     /// Swift 與 _Concurrency 都要查：2026-10-26 的殘包只有 Swift／SwiftOnoneSupport，
     /// 缺 _Concurrency 時前端退回 SDK 的 6.1.2 接口被拒讀——只查 Swift 會把殘包
     /// 誤報成「已疊加」，還會連累設定頁把疊加按鈕藏起來沒法補疊。
+    /// 查二進制不查接口：SDK 底包只有 6.1.2 接口、沒有任何 .swiftmodule 二進制，
+    /// 二進制在位即代表疊加完成；且疊加時接口已被清掉（見 downloadSwiftModules），
+    /// 接口文件本來就不會存在。
     var isSwiftModulesOverlaid: Bool {
         guard let sdk = SDKManager.shared.sdkPath else { return false }
         for module in ["Swift", "_Concurrency"] {
-            let iface = sdk.appendingPathComponent("usr/lib/swift/\(module).swiftmodule/arm64-apple-ios.swiftinterface")
-            guard let text = try? String(contentsOf: iface, encoding: .utf8),
-                  text.contains("swiftlang-6.2.4") || text.contains("Swift version 6.2.4")
-            else { return false }
+            let binary = sdk.appendingPathComponent("usr/lib/swift/\(module).swiftmodule/arm64-apple-ios.swiftmodule")
+            guard FileManager.default.fileExists(atPath: binary.path) else { return false }
         }
         return true
     }
@@ -172,6 +173,25 @@ final class ToolchainManager {
                             userInfo: [NSLocalizedDescriptionKey: "模塊包結構不對：缺 swift-stdlib-ios 目錄"])
                     }
                     let destDir = sdk.appendingPathComponent("usr/lib/swift", isDirectory: true)
+                    // 整目錄替換＋清接口（2026-10-26 CI 復現定案，diagnose-device-compile
+                    // run #3 的 E2 對照）：模塊目錄裡只要躺著 .swiftinterface，前端就
+                    // 繞過現成的 .swiftmodule 二進制、跑去從接口現場重建該模塊；
+                    // 裝置端前端在重建的 SILGen 里必崩（回溯定案）。所以帶二進制的
+                    // 模塊：先刪掉目的地整個舊目錄（清掉 SDK 底包 6.1.2 接口與舊疊加
+                    // 殘留），再把暫存目錄裡的接口文件删掉，只裝二進制進去。
+                    let fm = FileManager.default
+                    for name in (try? fm.contentsOfDirectory(atPath: srcDir.path)) ?? [] {
+                        guard name.hasSuffix(".swiftmodule") else { continue }
+                        let stagedModule = srcDir.appendingPathComponent(name, isDirectory: true)
+                        let stagedBinary = stagedModule.appendingPathComponent("arm64-apple-ios.swiftmodule")
+                        guard fm.fileExists(atPath: stagedBinary.path) else { continue }
+                        for file in (try? fm.contentsOfDirectory(atPath: stagedModule.path)) ?? [] {
+                            if file.hasSuffix(".swiftinterface") {
+                                try? fm.removeItem(at: stagedModule.appendingPathComponent(file))
+                            }
+                        }
+                        try? fm.removeItem(at: destDir.appendingPathComponent(name, isDirectory: true))
+                    }
                     try self.overlayCopy(from: srcDir, to: destDir)
                     try? FileManager.default.removeItem(at: stage)
                     completion(.success(()))
