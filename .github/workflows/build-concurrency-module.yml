@@ -1,0 +1,262 @@
+# 用官方 6.2.4 主機前端，把 _Concurrency 標準庫模塊按 arm64-apple-ios15.0
+# 編成二進制 .swiftmodule，補進 swift-toolchain-modules.zip。
+#
+# 背景（2026-10-26 符號化定案）：官方 pkg 的 _Concurrency 二進制是 ios16.0
+# 目標，裝置端 6.2.4 前端在 ios15 目標下不採用、回退從 .swiftinterface
+# 現場建模塊，SILGen 在子編譯實例裡讀到空 type 段錯。自家 Swift 模塊能被
+# 裝置直接載入（同版本主機編譯器、ios15 目標編的），_Concurrency 比照辦理。
+# 本 workflow 只動模塊包這一個資產，不碰工具鏈其他資產。
+name: build-concurrency-module
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TAG: toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5
+  SWIFT_REF: swift-6.2.4-RELEASE
+
+jobs:
+  build-concurrency:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Restore the host Swift 6.2.4 toolchain
+        id: host-swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: host-swift-toolchain
+          key: host-swift-6.2.4-osx-toolchain-v1
+
+      - name: Fetch the host Swift 6.2.4 toolchain
+        if: steps.host-swift-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 -o /tmp/swift-6.2.4-RELEASE-osx.pkg \
+            "https://download.swift.org/swift-6.2.4-release/xcode/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE-osx.pkg"
+          rm -rf /tmp/swift-pkg-x host-swift-toolchain
+          mkdir -p /tmp/swift-pkg-x/extracted
+          xar -xf /tmp/swift-6.2.4-RELEASE-osx.pkg -C /tmp/swift-pkg-x
+          find /tmp/swift-pkg-x -name Payload -type f -print0 | while IFS= read -r -d '' payload; do
+            tar -xf "$payload" -C /tmp/swift-pkg-x/extracted
+          done
+          find /tmp/swift-pkg-x/extracted -maxdepth 6 -print > /tmp/extracted-tree.txt
+          head -n 60 /tmp/extracted-tree.txt
+          SWIFTC_PATH="$(find /tmp/swift-pkg-x/extracted -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          TC_ROOT="$(dirname "$(dirname "$(dirname "$SWIFTC_PATH")")")"
+          mkdir -p host-swift-toolchain
+          cp -a "$TC_ROOT" host-swift-toolchain/
+
+      - name: Save the host Swift 6.2.4 toolchain
+        if: steps.host-swift-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.host-swift-cache.outputs.cache-primary-key }}
+          path: host-swift-toolchain
+
+      - name: Locate the host toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          test -x "$SWIFTC_PATH"
+          "$SWIFTC_PATH" --version | grep -F 'Swift version 6.2.4'
+          TC_USR="$(dirname "$(dirname "$SWIFTC_PATH")")"
+          test -x "$TC_USR/bin/swift-frontend"
+          echo "HOST_TC_USR=$TC_USR" >> "$GITHUB_ENV"
+          echo "HOST_FRONTEND=$TC_USR/bin/swift-frontend" >> "$GITHUB_ENV"
+
+      - name: Fetch Swift sources (Concurrency + gyb)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$SWIFT_REF" --filter=blob:none --sparse \
+            https://github.com/swiftlang/swift.git swift-src
+          cd swift-src
+          git sparse-checkout set stdlib/public/Concurrency utils
+          echo "SWIFTSRC=$PWD" >> "$GITHUB_ENV"
+          ls stdlib/public/Concurrency | head
+
+      - name: Download the current modules package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --dir /tmp/pkg-dl
+          mkdir -p pkg
+          unzip -q /tmp/pkg-dl/swift-toolchain-modules.zip -d pkg
+          ls pkg/swift-stdlib-ios
+
+      - name: Stage the resource dir (our ios15 Swift module shadows the official one)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf stage-rd
+          cp -R "$HOST_TC_USR/lib/swift" stage-rd
+          # 用模塊包裡自家 ios15 的 Swift／SwiftOnoneSupport 蓋掉官方 ios16 版：
+          # 新編的 _Concurrency 記錄的 Swift 依賴，必須跟裝置端實際載入的
+          # 是同一份文件，否則裝置會因依賴標識不符拒載。
+          rm -rf stage-rd/iphoneos/Swift.swiftmodule stage-rd/iphoneos/SwiftOnoneSupport.swiftmodule
+          cp -R pkg/swift-stdlib-ios/Swift.swiftmodule stage-rd/iphoneos/
+          cp -R pkg/swift-stdlib-ios/SwiftOnoneSupport.swiftmodule stage-rd/iphoneos/
+          echo "STAGE_RD=$PWD/stage-rd" >> "$GITHUB_ENV"
+          ls stage-rd/iphoneos | head -20
+
+      - name: Expand the gyb sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/gyb-out
+          cd "$SWIFTSRC/stdlib/public/Concurrency"
+          for g in 'Task+init.swift.gyb' 'TaskGroup+addTask.swift.gyb' 'Task+immediate.swift.gyb'; do
+            out="/tmp/gyb-out/${g%.gyb}"
+            PYTHONPATH="$SWIFTSRC/utils" python3 "$SWIFTSRC/utils/gyb" \
+              --line-directive '' -o "$out" "$g"
+            test -s "$out"
+            echo "gyb ok: $out"
+          done
+
+      - name: Emit the _Concurrency module for ios15
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "SDK=$SDK" >> "$GITHUB_ENV"
+          SRC="$SWIFTSRC/stdlib/public/Concurrency"
+          mkdir -p out/_Concurrency.swiftmodule
+          # 源码清單逐字對應 stdlib/public/Concurrency/CMakeLists.txt 的
+          # SWIFT_RUNTIME_CONCURRENCY_SWIFT_SOURCES
+          # + NONEMBEDDED_SWIFT_SOURCES（Darwin 預設 dispatch executor）
+          # + 三個 GYB_SOURCES 的展開結果。
+          SOURCES=(
+            Actor.swift AsyncLet.swift CheckedContinuation.swift Errors.swift
+            Executor.swift ExecutorBridge.swift ExecutorAssertions.swift
+            AsyncCompactMapSequence.swift AsyncDropFirstSequence.swift
+            AsyncDropWhileSequence.swift AsyncFilterSequence.swift
+            AsyncFlatMapSequence.swift AsyncIteratorProtocol.swift
+            AsyncMapSequence.swift AsyncPrefixSequence.swift
+            AsyncPrefixWhileSequence.swift AsyncSequence.swift
+            AsyncThrowingCompactMapSequence.swift AsyncThrowingDropWhileSequence.swift
+            AsyncThrowingFilterSequence.swift AsyncThrowingFlatMapSequence.swift
+            AsyncThrowingMapSequence.swift AsyncThrowingPrefixWhileSequence.swift
+            PartialAsyncTask.swift GlobalActor.swift GlobalConcurrentExecutor.swift
+            MainActor.swift PriorityQueue.swift SourceCompatibilityShims.swift
+            Task.swift 'Task+PriorityEscalation.swift' 'Task+TaskExecutor.swift'
+            TaskCancellation.swift TaskGroup.swift DiscardingTaskGroup.swift
+            TaskLocal.swift TaskSleep.swift AsyncStreamBuffer.swift
+            AsyncStream.swift AsyncThrowingStream.swift
+            Deque/_DequeBuffer.swift Deque/_DequeBufferHeader.swift
+            Deque/_DequeSlot.swift Deque/_UnsafeWrappedBuffer.swift
+            Deque/Compatibility.swift Deque/Deque+Storage.swift
+            Deque/Deque+UnsafeHandle.swift Deque/Deque.swift
+            Deque/Deque+Codable.swift Deque/Deque+Collection.swift
+            Deque/Deque+CustomDebugStringConvertible.swift
+            Deque/Deque+CustomReflectable.swift Deque/Deque+CustomStringConvertible.swift
+            Deque/Deque+Equatable.swift Deque/Deque+ExpressibleByArrayLiteral.swift
+            Deque/Deque+Extras.swift Deque/Deque+Hashable.swift
+            Deque/Deque+Testing.swift Deque/UnsafeMutableBufferPointer+Utilities.swift
+            Clock.swift ContinuousClock.swift SuspendingClock.swift
+            TaskSleepDuration.swift UnimplementedExecutor.swift
+            CooperativeExecutor.swift PlatformExecutorDarwin.swift
+            PlatformExecutorLinux.swift PlatformExecutorWindows.swift
+            PlatformExecutorOpenBSD.swift PlatformExecutorFreeBSD.swift
+            DispatchExecutor.swift CFExecutor.swift ExecutorImpl.swift
+            /tmp/gyb-out/Task+init.swift
+            '/tmp/gyb-out/TaskGroup+addTask.swift'
+            /tmp/gyb-out/Task+immediate.swift
+          )
+          # 旗標對齊官方接口頭記錄的 swift-module-flags，只把 target 換成 ios15.0
+          cd "$SRC"
+          "$HOST_FRONTEND" -frontend -emit-module "${SOURCES[@]}" \
+            -module-name _Concurrency \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK" \
+            -resource-dir "$STAGE_RD" \
+            -I "$SRC/InternalShims" \
+            -parse-stdlib -swift-version 5 -O \
+            -enable-library-evolution -enable-objc-interop \
+            -module-link-name swift_Concurrency \
+            -disable-objc-attr-requires-foundation-module \
+            -enforce-exclusivity=unchecked \
+            -target-min-inlining-version min \
+            -library-level api \
+            -strict-memory-safety \
+            -enable-experimental-feature NoncopyableGenerics2 \
+            -enable-experimental-feature SuppressedAssociatedTypes \
+            -enable-experimental-feature SE427NoInferenceOnExtension \
+            -enable-experimental-feature NonescapableTypes \
+            -enable-experimental-feature LifetimeDependence \
+            -enable-experimental-feature InoutLifetimeDependence \
+            -enable-experimental-feature LifetimeDependenceMutableAccessors \
+            -enable-upcoming-feature MemberImportVisibility \
+            -enable-experimental-feature IsolatedAny \
+            -enable-experimental-feature AllowUnsafeAttribute \
+            -enable-experimental-feature Extern \
+            -Xfrontend -swift-async-frame-pointer=always \
+            -emit-module-path "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule/arm64-apple-ios.swiftmodule" \
+            -emit-module-interface-path "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface"
+          ls -la "$GITHUB_WORKSPACE/out/_Concurrency.swiftmodule"
+
+      - name: Verify the emitted module (target + load test)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN=out/_Concurrency.swiftmodule/arm64-apple-ios.swiftmodule
+          test -s "$BIN"
+          ls -la out/_Concurrency.swiftmodule
+          # 硬閘一：新接口記錄的 target 必須是 ios15.0
+          grep -m1 'swift-module-flags' out/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface
+          grep -m1 'swift-module-flags' out/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface | grep -q 'arm64-apple-ios15.0'
+          # 參考資訊：二進制裡的目標字串
+          strings "$BIN" | grep -o 'arm64-apple-ios[0-9.]*' | sort -u || true
+          # 硬閘二：載入測試——新模塊放進 stage-rd 蓋掉官方版，主機前端以
+          # ios15 目標 typecheck 一段 import _Concurrency 的代碼；若二進制
+          # 被拒、回退現場建模塊，ModuleCache 會多出 _Concurrency 產物，
+          # 以此判別（Mac 上現場建可能成功，不能只看 typecheck 過不過）。
+          rm -rf stage-rd/iphoneos/_Concurrency.swiftmodule
+          cp -R out/_Concurrency.swiftmodule stage-rd/iphoneos/
+          printf 'import _Concurrency\npublic func probe() async { await Task.yield() }\n' > /tmp/probe.swift
+          rm -rf /tmp/verify-cache
+          "$HOST_FRONTEND" -frontend -typecheck /tmp/probe.swift \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDK" \
+            -resource-dir "$STAGE_RD" \
+            -module-cache-path /tmp/verify-cache
+          echo "module cache after typecheck:"
+          ls /tmp/verify-cache || true
+          if ls /tmp/verify-cache 2>/dev/null | grep -q '_Concurrency'; then
+            echo "::error::二進制被拒：前端回退現場建 _Concurrency（cache 出現產物）"
+            exit 1
+          fi
+          echo "load test passed: binary accepted, no interface rebuild"
+
+      - name: Repack the modules package and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          cp out/_Concurrency.swiftmodule/arm64-apple-ios.swiftmodule \
+            pkg/swift-stdlib-ios/_Concurrency.swiftmodule/
+          cp out/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface \
+            pkg/swift-stdlib-ios/_Concurrency.swiftmodule/
+          (cd pkg && zip -qr /tmp/swift-toolchain-modules.zip swift-stdlib-ios)
+          ls -la /tmp/swift-toolchain-modules.zip
+          gh release upload "$TAG" /tmp/swift-toolchain-modules.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          # 驗證消費者視角：重新下載，確認二進制在包裡、新接口在位
+          rm -rf /tmp/verify-dl
+          mkdir -p /tmp/verify-dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --dir /tmp/verify-dl
+          unzip -o -q /tmp/verify-dl/swift-toolchain-modules.zip -d /tmp/verify-dl/x
+          ls -la /tmp/verify-dl/x/swift-stdlib-ios/_Concurrency.swiftmodule/
+          grep -m1 'swift-module-flags' \
+            /tmp/verify-dl/x/swift-stdlib-ios/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface
