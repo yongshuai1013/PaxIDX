@@ -110,6 +110,13 @@ jobs:
           for v in /tmp/clangx/clang-headers/*/; do cp -R "$v/." "$SDK/usr/lib/clang/19.1.5/"; done
           ls "$SDK/usr/lib/swift" | head -8
           test -f "$SDK/System/Library/Frameworks/Foundation.framework/Modules/Foundation.swiftmodule/arm64-apple-ios.swiftinterface"
+          # 刪掉 SDK 裡重複的 libxml 樹（#4 探針唯一露出的真錯誤就是它）：
+          # 這份 SDK 同時有 usr/include/libxml2/（正版位置）與一整棵複製到
+          # usr/include/libxml/ 的分身，兩邊的 module.modulemap 都宣告
+          # module libxml2，clang 一載入就 redefinition。Nyxian 的原版 SDK
+          # 只有 libxml2/、沒有 libxml/——分身是這份「fixed」SDK 的加工殘留。
+          rm -rf "$SDK/usr/include/libxml"
+          test -f "$SDK/usr/include/libxml2/libxml/module.modulemap"
           # 去掩碼（只動 CI 這份 SDK 副本）：接口頭的編譯器版本標記改成
           # 6.2.4。查 swift 源碼實證：子編譯失敗時，loader 只要發現接口
           # 版本與當前編譯器不同，就用一句 this SDK is not supported 把
@@ -147,6 +154,7 @@ jobs:
             -enable-objc-interop \
             -module-cache-path /tmp/fcache-manual \
             -Xcc -resource-dir -Xcc "$SDK_DIR/usr/lib/clang/19.1.5" \
+            -module-name CoreFoundation \
             -o /tmp/CoreFoundation-manual.swiftmodule
           echo "manual exit=$?"
           ls -la /tmp/CoreFoundation-manual.swiftmodule 2>/dev/null || true
