@@ -205,16 +205,27 @@ final class ToolchainManager {
                     // 接口殘留觸發現場重建（理由同 stdlib 的整目錄替換）。
                     let fwStage = stage.appendingPathComponent("swift-frameworks-ios", isDirectory: true)
                     if fm.fileExists(atPath: fwStage.path),
-                       let enumerator = fm.enumerator(at: fwStage, includingPropertiesForKeys: nil) {
-                        for case let item as URL in enumerator {
-                            guard item.pathExtension == "swiftmodule",
+                       let rels = fm.enumerator(atPath: fwStage.path) {
+                        // 用 enumerator(atPath:) 的相對路徑算目的地，不再做
+                        // URL 絕對路徑的前綴截斷：真機實證（2026-10-26 晚）舊
+                        // 寫法算出的 rel 是錯的，目的地舊目錄從未被刪，
+                        // overlayCopy 又只是合併拷貝，結果二進制裝進去了、
+                        // SDK 原來的 .swiftinterface 還躺在旁邊——前端見到
+                        // 接口就繞過二進制現場重建，Foundation 依舊失敗
+                        // （debug 日誌 STAT 行實證兩者並存）。相對路徑 immune
+                        // 於 /private 前綴與符號連結差異。
+                        for case let rel as String in rels {
+                            let item = fwStage.appendingPathComponent(rel)
+                            var isDir: ObjCBool = false
+                            guard fm.fileExists(atPath: item.path, isDirectory: &isDir),
+                                  isDir.boolValue,
+                                  item.pathExtension == "swiftmodule",
                                   fm.fileExists(atPath: item.appendingPathComponent("arm64-apple-ios.swiftmodule").path)
                             else { continue }
                             for file in (try? fm.contentsOfDirectory(atPath: item.path)) ?? [] where file.hasSuffix(".swiftinterface") {
                                 try? fm.removeItem(at: item.appendingPathComponent(file))
                             }
-                            let rel = item.path.dropFirst(fwStage.path.count)
-                            try? fm.removeItem(atPath: sdk.path + rel)
+                            try? fm.removeItem(at: sdk.appendingPathComponent(rel))
                         }
                         try self.overlayCopy(from: fwStage, to: sdk)
                     }
