@@ -5,6 +5,8 @@
 
 #include <Foundation/Foundation.h>
 #include <dlfcn.h>
+#include <execinfo.h>
+#include <signal.h>
 #include <dispatch/dispatch.h>
 #include <string>
 #include <cstring>
@@ -282,6 +284,36 @@ extern "C" int paxidx_nyx_progress(char *buffer, size_t capacity) {
     return 0;
 }
 
+
+// 訊號捕捉（崩潰定位）：在試編開始時裝上，命中時把訊號編號與
+// backtrace 直接寫進進度檔再退出，讓下一次開 App 就能讀到死點。
+static char g_nyxProgressCPath[1024] = {0};
+static void nyxSigHandler(int sig, siginfo_t *info, void *uctx) {
+    (void)uctx;
+    int fd = open(g_nyxProgressCPath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (fd >= 0) {
+        char line[160];
+        int n = snprintf(line, sizeof(line), "SIGNAL %d addr=%p\n", sig,
+                         info ? info->si_addr : nullptr);
+        if (n > 0) (void)!write(fd, line, (size_t)n);
+        void *bt[48];
+        int frames = backtrace(bt, 48);
+        if (frames > 0) backtrace_symbols_fd(bt, frames, fd);
+        close(fd);
+    }
+    _exit(128 + sig);
+}
+static void nyxInstallSigHandlers(void) {
+    strncpy(g_nyxProgressCPath, nyxProgressPath().UTF8String, sizeof(g_nyxProgressCPath) - 1);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = nyxSigHandler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    const int sigs[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGTRAP};
+    for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) sigaction(sigs[i], &sa, nullptr);
+}
+
 typedef struct __CCJob *CCJobRef2;
 typedef struct __CCDriver *CCDriverRef2;
 typedef struct __CCDiagnostic *CCDiagnosticRef2;
@@ -296,6 +328,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     std::string report;
     auto line = [&](const std::string &t) { report += t; report += "\n"; };
     { FILE *f = fopen(nyxProgressPath().UTF8String, "w"); if (f) fclose(f); }
+    nyxInstallSigHandlers();
     nyxMark("start");
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
@@ -356,7 +389,16 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     }
     nyxMark("driver created");
     line("driver 建立成功");
-    CFArrayRef jobs = pDriverJobs(kCFAllocatorSystemDefault, driver);
+    nyxMark("calling CreateJobs");
+    CFArrayRef jobs = nullptr;
+    try {
+        jobs = pDriverJobs(kCFAllocatorSystemDefault, driver);
+    } catch (...) {
+        nyxMark("EXCEPTION in CreateJobs");
+        line("CCDriverCreateJobs 丟出 C++ 例外（已攔截）");
+        copyDiag(report.c_str(), buffer, capacity);
+        return 1;
+    }
     CFIndex njobs = jobs ? CFArrayGetCount(jobs) : 0;
     { char b[64]; snprintf(b, sizeof(b), "jobs created n=%ld", (long)njobs); nyxMark(b); }
     line("driver 產出 job 數：" + std::to_string((long)njobs));
