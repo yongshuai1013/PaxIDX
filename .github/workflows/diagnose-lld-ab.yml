@@ -1,0 +1,173 @@
+# A/B 實驗：裝置端 lld 讀 SDK 的 .tbd 等於讀空（找得到、不報錯、零符號），
+# 到底是不是 LLVM 源碼樹的差異？
+#
+# 背景（2026-10-26）：PaxIDX 工具鏈的 lld 出自 swiftlang/llvm-project
+# （swift/release/6.2），真機以 -lSystem -lswiftCore 連結時兩庫零符號貢獻；
+# Nyxian 的 lld 出自其自家 llvm-project（19.1.7 基底），同樣靠 .tbd 連結
+# 卻正常。本實驗在主機上各編一支 ld64.lld（swift 樹套用與 native-toolchain
+# 相同的 InputFiles.cpp 四行補丁；Nyxian 樹原樣），用裝置端第一輪的原始
+# 連結參數連同一組目標文件，比較結果。
+name: diagnose-lld-ab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOOLCHAIN_TAG: toolchain-33957bbc59f4-swift-swift-6.2.4-RELEASE-ios15.0-sdk18.5
+  SDK_TAG: darwin-sdk-1
+
+jobs:
+  lld-ab:
+    runs-on: macos-15
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tree: swift
+            repo: swiftlang/llvm-project
+            ref: swift/release/6.2
+            patch: "yes"
+          - tree: nyxian
+            repo: ProjectNyxian/llvm-project
+            ref: main
+            patch: "no"
+    name: lld-ab (${{ matrix.tree }})
+    steps:
+      - name: Checkout LLVM (${{ matrix.tree }})
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: llvm-project
+          fetch-depth: 1
+
+      - name: Apply the toolchain's InputFiles.cpp patch (swift tree only)
+        if: ${{ matrix.patch == 'yes' }}
+        run: |
+          python3 - <<'PYEOF'
+          path = "llvm-project/lld/MachO/InputFiles.cpp"
+          with open(path) as f:
+              lines = f.readlines()
+          out = []
+          skip = 0
+          for line in lines:
+              if "Swift LLVM fork downstream change start" in line:
+                  skip = 4
+                  continue
+              if skip > 0:
+                  skip -= 1
+                  continue
+              out.append(line)
+          assert len(out) < len(lines), "找不到 LLD patch 點"
+          with open(path, "w") as f:
+              f.writelines(out)
+          print("LLD iOS patch 完成（與 native-toolchain 相同）")
+          PYEOF
+
+      - name: Build ld64.lld
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -G Ninja -S llvm-project/llvm -B llvm-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=lld \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF
+          ninja -C llvm-build ld64.lld
+          ls -la llvm-build/bin/ld64.lld
+          echo "LLD=$PWD/llvm-build/bin/ld64.lld" >> "$GITHUB_ENV"
+
+      - name: Restore the host Swift 6.2.4 toolchain
+        id: host-swift-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: host-swift-toolchain
+          key: host-swift-6.2.4-osx-toolchain-v1
+
+      - name: Locate the host frontend
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
+          test -n "$SWIFTC_PATH"
+          TC_USR="$(dirname "$(dirname "$SWIFTC_PATH")")"
+          test -x "$TC_USR/bin/swift-frontend"
+          echo "HOST_FRONTEND=$TC_USR/bin/swift-frontend" >> "$GITHUB_ENV"
+
+      - name: Assemble the device-equivalent SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dl
+          gh release download "$SDK_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'paxidx-darwin-sdk.zip' --dir dl
+          gh release download "$TOOLCHAIN_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'swift-toolchain-modules.zip' --pattern 'clang-resource-headers.zip' --dir dl
+          mkdir -p sdkroot
+          unzip -q dl/paxidx-darwin-sdk.zip -d sdkroot
+          SDKROOT="$PWD/sdkroot/iPhoneOS-fixed.sdk"
+          test -d "$SDKROOT"
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          mkdir -p /tmp/clang-h && unzip -q dl/clang-resource-headers.zip -d /tmp/clang-h
+          rm -rf "$SDKROOT/usr/lib/clang"
+          mkdir -p "$SDKROOT/usr/lib/clang/19.1.5"
+          cp -R /tmp/clang-h/clang-headers/19/. "$SDKROOT/usr/lib/clang/19.1.5/"
+          mkdir -p /tmp/mods && unzip -q dl/swift-toolchain-modules.zip -d /tmp/mods
+          cp -R /tmp/mods/swift-stdlib-ios/. "$SDKROOT/usr/lib/swift/"
+          for m in Swift SwiftOnoneSupport _Concurrency; do
+            rm -f "$SDKROOT/usr/lib/swift/$m.swiftmodule/"*.swiftinterface \
+                  "$SDKROOT/usr/lib/swift/$m.swiftmodule/"*.private.swiftinterface
+          done
+          echo "SDK assembled: $SDKROOT"
+
+      - name: A/B link test (${{ matrix.tree }} lld, device round-1 recipe)
+        shell: bash
+        run: |
+          set -uxo pipefail
+          mkdir -p /tmp/ab
+          printf 'func hello() { print("Hello") }\n' > /tmp/ab/newfile.swift
+          rm -rf /tmp/cache-ab && mkdir -p /tmp/cache-ab
+          FE=0
+          "$HOST_FRONTEND" -frontend -c /tmp/ab/newfile.swift \
+            -module-cache-path /tmp/cache-ab \
+            -Xcc -fmodules-cache-path=/tmp/cache-ab \
+            -target arm64-apple-ios15.0 \
+            -sdk "$SDKROOT" \
+            -resource-dir "$SDKROOT/usr/lib/swift" \
+            -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
+            -enable-objc-interop -parse-as-library -emit-object \
+            -o /tmp/ab/newfile.o > /tmp/out-abc.txt 2>&1 || FE=$?
+          echo "=== compile exit=$FE"; ls -la /tmp/ab/newfile.o || { cat /tmp/out-abc.txt; exit 1; }
+          printf 'int main(void){return 0;}\n' > /tmp/ab/main.c
+          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/ab/main.c -o /tmp/ab/main.o
+          echo 'z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAADQAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAA2AAAAAEAAADoAAAAKwAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdENvbXBhdGliaWxpdHk1NgA=' | base64 -d > /tmp/ab/stub.o
+          echo "########## TREE=${{ matrix.tree }} LLD=$LLD"
+          echo "----- probe 1: C-only (main.o + stub + -lSystem)"
+          V=0
+          "$LLD" /tmp/ab/main.o /tmp/ab/stub.o \
+            -arch arm64 -platform_version ios 15.0 18.5 \
+            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
+            -lSystem -o /tmp/ab/TestC > /tmp/out-ab1.txt 2>&1 || V=$?
+          echo "=== probe1 exit=$V"; cat /tmp/out-ab1.txt
+          if [ -f /tmp/ab/TestC ]; then echo "--- probe1 loads:"; otool -L /tmp/ab/TestC; fi
+          echo "----- probe 2: full (newfile.o + main.o + stub + -lSystem -lswiftCore)"
+          V=0
+          "$LLD" /tmp/ab/newfile.o /tmp/ab/main.o /tmp/ab/stub.o \
+            -arch arm64 -platform_version ios 15.0 18.5 \
+            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
+            -lSystem -lswiftCore -o /tmp/ab/Test > /tmp/out-ab2.txt 2>&1 || V=$?
+          echo "=== probe2 exit=$V"; cat /tmp/out-ab2.txt
+          if [ -f /tmp/ab/Test ]; then
+            echo "--- probe2 loads:"; otool -L /tmp/ab/Test
+            echo "--- probe2 undefined left:"; (nm -u /tmp/ab/Test) || true
+          fi
+          echo "########## A/B done (${{ matrix.tree }})"
