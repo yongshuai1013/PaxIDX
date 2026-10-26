@@ -201,8 +201,8 @@ final class ToolchainManager {
     /// CI 自 #37 起就發佈 clang-resource-headers.zip（註釋寫明「App 疊加到
     /// SDK 的 usr/lib/clang/<版本>/」），但 App 一直沒寫下載它的代碼，
     /// 每份真機 log 的 usr/lib/clang 都是空的。
-    /// zip 內結構：clang-headers/<版本目錄>/<文件>，版本目錄原樣搬過去，
-    /// 橋接層掃目錄認版本、不寫死版號。
+    /// zip 內結構：clang-headers/<版本目錄>/<文件>；安裝時統一改名到
+    /// usr/lib/clang/19.1.5，對齊出貨 dylib 橋接層的寫死探測點（函數內註釋）。
     func downloadClangHeaders(
         onProgress: @escaping (Double) -> Void,
         completion: @escaping (Result<Void, Error>) -> Void
@@ -226,14 +226,37 @@ final class ToolchainManager {
                     try? FileManager.default.removeItem(at: stage)
                     try self.extract(zip: fileURL, to: stage)
                     try? FileManager.default.removeItem(at: fileURL)
-                    // zip 內結構：clang-headers/<版本目錄>，內容覆蓋到 usr/lib/clang
+                    // zip 內結構：clang-headers/<版本目錄>/<文件>
                     let srcDir = stage.appendingPathComponent("clang-headers", isDirectory: true)
                     guard FileManager.default.fileExists(atPath: srcDir.path) else {
                         throw NSError(domain: "ToolchainManager", code: -3,
                             userInfo: [NSLocalizedDescriptionKey: "Clang 頭文件包結構不對：缺 clang-headers 目錄"])
                     }
-                    let destDir = sdk.appendingPathComponent("usr/lib/clang", isDirectory: true)
-                    try self.overlayCopy(from: srcDir, to: destDir)
+                    // M2 前端參數是在工具鏈 dylib 內部組裝的（ToolchainDylibImpl
+                    // 的 paxidx_dylib_swift_compile），出貨 dylib 的橋接寫死探測
+                    // usr/lib/clang/19.1.5/include/stdarg.h 才肯傳 -Xcc -resource-dir；
+                    // 資產的版本目錄名隨 LLVM 構建而變（實測只有 19），#54 真機 log
+                    // 實證：頭文件裝在 19 底下、探測沒中、參數仍沒傳、照樣崩。
+                    // 橋接源碼已改成掃目錄認版本，但要等下一輪工具鏈重編才生效；
+                    // 在此之前 App 統一把版本目錄改名到 19.1.5 對齊探測點。
+                    // usr/lib/clang 整個目錄由本疊加管理（SDK 底包沒有），
+                    // 每次先清掉再裝，避免舊版號目錄殘留。
+                    let fm = FileManager.default
+                    let clangBase = sdk.appendingPathComponent("usr/lib/clang", isDirectory: true)
+                    try? fm.removeItem(at: clangBase)
+                    let destDir = clangBase.appendingPathComponent("19.1.5", isDirectory: true)
+                    let versionDirs = try fm.contentsOfDirectory(atPath: srcDir.path).filter {
+                        var isDir: ObjCBool = false
+                        fm.fileExists(atPath: srcDir.appendingPathComponent($0).path, isDirectory: &isDir)
+                        return isDir.boolValue
+                    }
+                    guard !versionDirs.isEmpty else {
+                        throw NSError(domain: "ToolchainManager", code: -3,
+                            userInfo: [NSLocalizedDescriptionKey: "Clang 頭文件包結構不對：clang-headers 下沒有版本目錄"])
+                    }
+                    for v in versionDirs {
+                        try self.overlayCopy(from: srcDir.appendingPathComponent(v, isDirectory: true), to: destDir)
+                    }
                     try? FileManager.default.removeItem(at: stage)
                     completion(.success(()))
                 } catch {
