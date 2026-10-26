@@ -110,59 +110,58 @@ jobs:
           ls /tmp/cache-e6 | grep '\.swiftmodule$' || echo "(none)"
           ls -la /tmp/e6/newfile.o || echo "--- E6 NO object"
 
-      - name: E7 - inspect object autolink options and trial-link with the proper recipe
+      - name: E8 - trial link variants for the compat56 FORCE_LOAD reference
         shell: bash
         run: |
           set -uxo pipefail
-          # E6 按裝置現況（帶 -parse-as-library）編頂層 print，注定無 .o；
-          # E7 改按「修復後」的橋接參數（去掉 -parse-as-library）自編一份 .o，
-          # 這正是修復後管線真正要連結的對象。
-          mkdir -p /tmp/e7/tbd
-          printf 'print("Hello")\n' > /tmp/e7/newfile.swift
-          rm -rf /tmp/cache-e7 && mkdir -p /tmp/cache-e7
+          mkdir -p /tmp/e8/tbd
+          printf 'print("Hello")\n' > /tmp/e8/newfile.swift
+          rm -rf /tmp/cache-e8 && mkdir -p /tmp/cache-e8
           FE=0
-          "$HOST_FRONTEND" -frontend -c /tmp/e7/newfile.swift \
-            -module-cache-path /tmp/cache-e7 \
-            -Xcc -fmodules-cache-path=/tmp/cache-e7 \
+          "$HOST_FRONTEND" -frontend -c /tmp/e8/newfile.swift \
+            -module-cache-path /tmp/cache-e8 \
+            -Xcc -fmodules-cache-path=/tmp/cache-e8 \
             -target arm64-apple-ios15.0 \
             -sdk "$SDKROOT" \
             -resource-dir "$SDKROOT/usr/lib/swift" \
             -Xcc -resource-dir -Xcc "$SDKROOT/usr/lib/clang/19.1.5" \
             -enable-objc-interop -emit-object \
-            -o /tmp/e7/newfile.o > /tmp/out-e7c.txt 2>&1 || FE=$?
-          echo "=== E7 compile exit=$FE"
-          cat /tmp/out-e7c.txt
-          ls -la /tmp/e7/newfile.o || echo "E7 NO object"
-          echo "=== E7a linker options recorded in newfile.o (autolink):"
-          otool -l /tmp/e7/newfile.o | grep -A6 'LC_LINKER_OPTION' || echo "(grep found no LC_LINKER_OPTION)"
-          echo "--- E7a strings in newfile.o mentioning swift libs:"
-          (strings /tmp/e7/newfile.o | grep -iE 'swift' | sort -u | head -40) || true
-          cat > /tmp/e7/tbd/libswiftCompatibility56.tbd <<'TBD'
+            -o /tmp/e8/newfile.o > /tmp/out-e8c.txt 2>&1 || FE=$?
+          echo "=== E8 compile exit=$FE"; ls -la /tmp/e8/newfile.o || echo "E8 NO object"
+          printf 'int main(void){return 0;}\n' > /tmp/e8/main.c
+          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e8/main.c -o /tmp/e8/main.o || echo "E8 main.o failed"
+          cat > /tmp/e8/tbd/libswiftCompatibility56.tbd <<'TBD'
           --- !tapi-tbd
           tbd-version:     4
           targets:         [ arm64-ios ]
+          uuids:
+            - target:          arm64-ios
+              uuid:            00000000-0000-0000-0000-000000000000
           install-name:    '/usr/lib/swift/libswiftCompatibility56.dylib'
+          current-version: 1
+          compatibility-version: 1
           exports:
             - targets:         [ arm64-ios ]
               symbols:         [ __swift_FORCE_LOAD_$_swiftCompatibility56 ]
           TBD
-          printf 'int main(void){return 0;}\n' > /tmp/e7/main.c
-          clang -target arm64-apple-ios15.0 -isysroot "$SDKROOT" -c /tmp/e7/main.c -o /tmp/e7/main.o || echo "E7 main.o compile failed"
-          echo "=== E7b V1: full recipe (-lSystem -lswiftCore + weak compat56 via synthesized tbd)"
+          echo "=== E8 V1: weak synthesized tbd v2"
           V1=0
-          ld -o /tmp/e7/TestV1 /tmp/e7/newfile.o /tmp/e7/main.o \
+          ld -o /tmp/e8/TestV1 /tmp/e8/newfile.o /tmp/e8/main.o \
             -arch arm64 -platform_version ios 15.0 18.5 \
-            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" -L/tmp/e7/tbd \
-            -lSystem -lswiftCore -weak-lswiftCompatibility56 > /tmp/out-v1.txt 2>&1 || V1=$?
-          echo "V1 exit=$V1"; cat /tmp/out-v1.txt
-          echo "--- V1 load commands:"; otool -L /tmp/e7/TestV1 || echo "(no V1 output)"
-          echo "--- V1 still-undefined:"; (nm -u /tmp/e7/TestV1) || true
-          echo "=== E7c V2: no compat56 handling at all (see what the link demands)"
-          V2=0
-          ld -o /tmp/e7/TestV2 /tmp/e7/newfile.o /tmp/e7/main.o \
+            -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" -L/tmp/e8/tbd \
+            -lSystem -lswiftCore -weak-lswiftCompatibility56 > /tmp/out-e8v1.txt 2>&1 || V1=$?
+          echo "V1 exit=$V1"; cat /tmp/out-e8v1.txt
+          echo "--- V1 load commands:"; otool -L /tmp/e8/TestV1 || echo "(no V1 output)"
+          echo "=== E8 V3: hand-built stub object defining the FORCE_LOAD symbol, no tbd"
+          echo 'z/rt/gwAAAEAAAAAAQAAAAIAAACwAAAAAAAAAAAAAAAZAAAAmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0AAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAQAAAAAAAABfX2RhdGEAAAAAAAAAAAAAX19EQVRBAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAADQAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAYAAAA2AAAAAEAAADoAAAAKwAAAAAAAAAAAAAAAQAAAA8BAAAAAAAAAAAAAABfX3N3aWZ0X0ZPUkNFX0xPQURfJF9zd2lmdENvbXBhdGliaWxpdHk1NgA=' | base64 -d > /tmp/e8/stub.o
+          echo "--- stub.o symbols:"; (nm /tmp/e8/stub.o) || true
+          echo "--- stub.o load commands:"; (otool -l /tmp/e8/stub.o | head -30) || true
+          V3=0
+          ld -o /tmp/e8/TestV3 /tmp/e8/newfile.o /tmp/e8/main.o /tmp/e8/stub.o \
             -arch arm64 -platform_version ios 15.0 18.5 \
             -syslibroot "$SDKROOT" -L"$SDKROOT/usr/lib/swift" \
-            -lSystem -lswiftCore > /tmp/out-v2.txt 2>&1 || V2=$?
-          echo "V2 exit=$V2"; cat /tmp/out-v2.txt
-          echo "--- V2 load commands:"; otool -L /tmp/e7/TestV2 || echo "(no V2 output)"
-          echo "=== E7 done"
+            -lSystem -lswiftCore > /tmp/out-e8v3.txt 2>&1 || V3=$?
+          echo "V3 exit=$V3"; cat /tmp/out-e8v3.txt
+          echo "--- V3 load commands:"; otool -L /tmp/e8/TestV3 || echo "(no V3 output)"
+          echo "--- V3 undefined left:"; (nm -u /tmp/e8/TestV3) || true
+          echo "=== E8 done"
