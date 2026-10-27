@@ -353,7 +353,7 @@ typedef Boolean (*CCJobExecuteJobFn)(CCJobRef2, CFArrayRef *, CFStringRef *);
 typedef uint8_t (*CCDiagnosticGetLevelFn)(CCDiagnosticRef2);
 typedef CFStringRef (*CCDiagnosticGetMessageFn)(CCDiagnosticRef2);
 typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
-typedef CCJobRef2 (*CCJobCreateFn)(CFAllocatorRef, uint8_t, CFArrayRef, CFArrayRef, CFURLRef);
+typedef CCJobRef2 (*CCJobCreateFn)(CFAllocatorRef, uint8_t, CFArrayRef);
 typedef CFURLRef (*CCDriverCopySysrootURLFn)(CCDriverRef2);
 typedef CFArrayRef (*CCJobCreateArgumentsFn)(CFAllocatorRef, CCJobRef2);
 typedef CFArrayRef (*CCJobGetBaseArgumentsFn)(CCJobRef2);
@@ -529,56 +529,17 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         nyxMark("direct v2 start");
         NSString *errSrc = [dir stringByAppendingPathComponent:@"testerr.c"];
         [@"int main(void) { return oops }\n" writeToFile:errSrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        auto runJob = [&](NSString *srcPath, NSString *objPath, NSArray *baseArgs, const char *tag) {
-            CCJobRef2 job = pJobCreate(nyxZeroAllocator(), 0,
-                (__bridge CFArrayRef)baseArgs,
-                (__bridge CFArrayRef)@[ [NSURL fileURLWithPath:srcPath] ],
-                (__bridge CFURLRef)[NSURL fileURLWithPath:objPath]);
+        auto runJob = [&](NSString *srcPath, NSString *objPath, const char *tag) {
+            // 0.11.4 契約：job 只存一份完整 argv（就是 driver 命令的原樣，
+            // 含 -o 與輸入檔），CCJobGetArguments 原樣交給 CreateFromArgs。
+            NSArray *fullArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+                @"-main-file-name", [srcPath lastPathComponent], @"-isysroot", sdk,
+                @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+                @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+                @"-o", objPath, @"-x", @"c", srcPath];
+            CCJobRef2 job = pJobCreate(nyxZeroAllocator(), 0, (__bridge CFArrayRef)fullArgs);
             if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
             if (pJobType) { char b[32]; snprintf(b, sizeof(b), "%s type=%d", tag, (int)pJobType(job)); line(b); }
-            if (pJobBase) {
-                CFArrayRef ba = pJobBase(job);
-                std::string dump = std::string(tag) + " baseArgs：";
-                if (ba) {
-                    CFIndex n = CFArrayGetCount(ba);
-                    for (CFIndex i = 0; i < n; i++) {
-                        CFStringRef a = (CFStringRef)CFArrayGetValueAtIndex(ba, i);
-                        dump += " [";
-                        dump += a ? ([(__bridge NSString *)a UTF8String] ?: "?") : "?";
-                        dump += "]";
-                    }
-                } else { dump += "(null)"; }
-                line(dump);
-            }
-            if (pJobInputs) {
-                CFArrayRef ia = pJobInputs(job);
-                std::string dump = std::string(tag) + " inputs：";
-                if (ia) {
-                    CFIndex n = CFArrayGetCount(ia);
-                    for (CFIndex i = 0; i < n; i++) {
-                        CFURLRef u = (CFURLRef)CFArrayGetValueAtIndex(ia, i);
-                        dump += " [";
-                        dump += u ? ([(__bridge NSURL *)u path].UTF8String ?: "?") : "?";
-                        dump += "]";
-                    }
-                } else { dump += "(null)"; }
-                line(dump);
-            }
-            if (pJobArgs) {
-                CFArrayRef full = pJobArgs(nyxZeroAllocator(), job);
-                if (full) {
-                    std::string dump = std::string(tag) + " argv：";
-                    CFIndex n = CFArrayGetCount(full);
-                    for (CFIndex i = 0; i < n; i++) {
-                        CFStringRef a = (CFStringRef)CFArrayGetValueAtIndex(full, i);
-                        dump += " [";
-                        dump += a ? ([(__bridge NSString *)a UTF8String] ?: "?") : "?";
-                        dump += "]";
-                    }
-                    line(dump);
-                    CFRelease(full);
-                }
-            }
             CFArrayRef diags = NULL;
             CFStringRef mainSrc = NULL;
             CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
@@ -606,26 +567,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             if (mainSrc) CFRelease(mainSrc);
             CFRelease(job);
         };
-        NSArray *cc1Args = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
-            @"-main-file-name", @"test.c", @"-isysroot", sdk,
-            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
-            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
-        NSArray *noCc1Args = @[@"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
-            @"-main-file-name", @"test.c", @"-isysroot", sdk,
-            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
-            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
-        runJob(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"], cc1Args, "A(cc1+錯誤源碼)");
-        runJob([dir stringByAppendingPathComponent:@"nope_missing.c"], [dir stringByAppendingPathComponent:@"nope.o"], cc1Args, "C(cc1+不存在的輸入檔)");
-        runJob(src, [dir stringByAppendingPathComponent:@"test2.o"], noCc1Args, "B(無cc1+正確源碼)");
-        for (NSString *name in @[@"testerr.o", @"test2.o"]) {
-            NSString *pp = [dir stringByAppendingPathComponent:name];
-            if ([fm fileExistsAtPath:pp]) {
-                unsigned long long sz = [[fm attributesOfItemAtPath:pp error:nil] fileSize];
-                line("產物 " + std::string(name.UTF8String) + " 已生成，大小 " + std::to_string(sz));
-            } else {
-                line("產物 " + std::string(name.UTF8String) + " 不存在");
-            }
-        }
+        runJob(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"], "A(錯誤源碼)");
+        runJob([dir stringByAppendingPathComponent:@"nope_missing.c"], [dir stringByAppendingPathComponent:@"nope.o"], "C(不存在的輸入檔)");
+        runJob(src, obj, "B(正確源碼)");
         nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
