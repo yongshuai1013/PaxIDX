@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <signal.h>
+#include <mach/mach.h>
 #include <dispatch/dispatch.h>
 #include <string>
 #include <cstring>
@@ -329,6 +330,12 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     auto line = [&](const std::string &t) { report += t; report += "\n"; };
     { FILE *f = fopen(nyxProgressPath().UTF8String, "w"); if (f) fclose(f); }
     nyxInstallSigHandlers();
+    // 把 stderr 直接接到進度檔（O_APPEND）：LLVM 的 fatal error 訊息
+    // （bad_alloc 的原因字串）會在 abort 前寫到 errs()，落盤才看得到
+    {
+        int fd = open(nyxProgressPath().UTF8String, O_WRONLY | O_APPEND | O_CREAT, 0644);
+        if (fd >= 0) { dup2(fd, 2); close(fd); }
+    }
     nyxMark("start");
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
@@ -377,6 +384,34 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     [code writeToFile:src atomically:YES encoding:NSUTF8StringEncoding error:nil];
     line("源文件：" + std::string(src.UTF8String));
     line("SDK：" + std::string(sdk.UTF8String));
+    // 探針 A：極簡引數（不帶 -target/-isysroot）的 driver 先跑一次
+    // CreateJobs，用來分離「環境／記憶體問題」與「我們的引數／SDK 路徑問題」
+    {
+        NSArray *probeArgs = @[@"-c", src, @"-o", obj];
+        CCDriverRef2 probe = pDriverCreate(kCFAllocatorSystemDefault,
+                                            (__bridge CFArrayRef)probeArgs, 0);
+        if (probe) {
+            nyxMark("probe driver created");
+            CFArrayRef probeJobs = pDriverJobs(kCFAllocatorSystemDefault, probe);
+            { char b[64]; snprintf(b, sizeof(b), "probe jobs n=%ld", probeJobs ? (long)CFArrayGetCount(probeJobs) : -1L); nyxMark(b); }
+            if (probeJobs) CFRelease(probeJobs);
+            CFRelease(probe);
+            nyxMark("probe done");
+        } else {
+            nyxMark("probe driver create failed");
+        }
+    }
+    // 記憶體證據：印出 CreateJobs 前的 phys_footprint
+    {
+        struct task_vm_info info;
+        mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &cnt) == KERN_SUCCESS) {
+            char b[96];
+            snprintf(b, sizeof(b), "footprint before real CreateJobs = %llu MB",
+                     info.phys_footprint / (1024 * 1024));
+            nyxMark(b);
+        }
+    }
     NSArray *args = @[@"-target", @"arm64-apple-ios15.0", @"-isysroot", sdk,
                       @"-c", src, @"-o", obj];
     nyxMark("src+sdk ready");
