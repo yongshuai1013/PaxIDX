@@ -546,8 +546,16 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             }
             CFArrayRef diags = NULL;
             CFStringRef mainSrc = NULL;
+            CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
             Boolean success = pJobExecute(job, &diags, &mainSrc);
+            CFAbsoluteTime dt = CFAbsoluteTimeGetCurrent() - t0;
             line(std::string(tag) + " 執行結果：" + (success ? "成功" : "失敗"));
+            { char b[64]; snprintf(b, sizeof(b), "%s 耗時 %.0f ms", tag, dt * 1000.0); line(b); }
+            if (mainSrc) {
+                line(std::string(tag) + " mainSource=" + ((__bridge NSString *)mainSrc).UTF8String);
+            } else {
+                line(std::string(tag) + " mainSource=(null)");
+            }
             if (diags && pDiagLevel && pDiagMessage) {
                 CFIndex nd = CFArrayGetCount(diags);
                 for (CFIndex d = 0; d < nd; d++) {
@@ -571,6 +579,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
             @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
         runJob(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"], cc1Args, "A(cc1+錯誤源碼)");
+        runJob([dir stringByAppendingPathComponent:@"nope_missing.c"], [dir stringByAppendingPathComponent:@"nope.o"], cc1Args, "C(cc1+不存在的輸入檔)");
         runJob(src, [dir stringByAppendingPathComponent:@"test2.o"], noCc1Args, "B(無cc1+正確源碼)");
         for (NSString *name in @[@"testerr.o", @"test2.o"]) {
             NSString *pp = [dir stringByAppendingPathComponent:name];
