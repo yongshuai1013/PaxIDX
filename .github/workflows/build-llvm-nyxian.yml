@@ -19,6 +19,18 @@ jobs:
       - name: Show vendored preset deployment target
         run: |
           grep darwin-deployment-version-ios Scripts/swift-ios-toolchain-presets.ini
+      - name: Fetch sources (their Makefile swift target, incl. their lld patch)
+        run: |
+          make swift SWIFT_BRANCH=swift-6.4.0-RELEASE
+      - name: Patch - iOS 15 availability in SwiftMacros (our patch)
+        run: |
+          f=swift/lib/Macros/Sources/SwiftMacros/DebugDescriptionMacro.swift
+          test -f "$f"
+          before=$(grep -c 'guard #available(macOS 13, \*) else {' "$f")
+          echo "anchor count before: $before"
+          test "$before" = "1"
+          perl -i -pe 's/guard #available\(macOS 13, \*\) else \{/guard #available(macOS 13, iOS 16, *) else {/' "$f"
+          grep -n 'guard #available' "$f"
       - name: Build (vendored Makefile)
         env:
           IOS_DEPLOYMENT_TARGET: "15.0"
