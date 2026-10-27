@@ -355,6 +355,7 @@ typedef CFStringRef (*CCDiagnosticGetMessageFn)(CCDiagnosticRef2);
 typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
 typedef CCJobRef2 (*CCJobCreateFn)(CFAllocatorRef, uint8_t, CFArrayRef, CFArrayRef, CFURLRef);
 typedef CFURLRef (*CCDriverCopySysrootURLFn)(CCDriverRef2);
+typedef CFArrayRef (*CCJobCreateArgumentsFn)(CFAllocatorRef, CCJobRef2);
 
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     std::string report;
@@ -397,6 +398,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     auto pJobOutput = (CCJobGetOutputFileURLFn)sym("CCJobGetOutputFileURL");
     auto pJobCreate = (CCJobCreateFn)sym("CCJobCreate");
     auto pDriverSysroot = (CCDriverCopySysrootURLFn)sym("CCDriverCopySysrootURL");
+    auto pJobArgs = (CCJobCreateArgumentsFn)sym("CCJobCreateArguments");
     nyxMark("symbols ok");
     if (!pDriverCreate || !pDriverJobs || !pJobExecute) {
         copyDiag(report.c_str(), buffer, capacity);
@@ -514,27 +516,38 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     nyxMark("jobs done");
     if (jobs) CFRelease(jobs);
     CFRelease(driver);
-    // 直打 CCJob 探針：繞過 driver，自己組 -cc1 引數建 compiler job
-    // 執行——這一層的診斷會真的回來（driver 層的被 IgnoringDiagConsumer 吞了）
+    // 直打 CCJob 探針 v2：A=帶 -cc1＋故意寫錯的源碼（驗前端是否真解析，
+    // 真解析必回錯誤診斷）；B=不帶 -cc1＋正確源碼（驗 CreateFromArgs 契約
+    // 與 .o 產出）。兩邊都先印出 CCJobCreateArguments 組出的最終 argv。
     if (pJobCreate) {
-        nyxMark("direct job start");
-        NSArray *baseArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
-            @"-main-file-name", @"test.c", @"-isysroot", sdk,
-            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
-            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
-        NSArray *inputs = @[[NSURL fileURLWithPath:src]];
-        CCJobRef2 djob = pJobCreate(nyxZeroAllocator(), 0,
-            (__bridge CFArrayRef)baseArgs, (__bridge CFArrayRef)inputs,
-            (__bridge CFURLRef)[NSURL fileURLWithPath:obj]);
-        if (!djob) {
-            line("直打 CCJobCreate 回傳空");
-            nyxMark("direct job create failed");
-        } else {
+        nyxMark("direct v2 start");
+        NSString *errSrc = [dir stringByAppendingPathComponent:@"testerr.c"];
+        [@"int main(void) { return oops }\n" writeToFile:errSrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        auto runJob = [&](NSString *srcPath, NSString *objPath, NSArray *baseArgs, const char *tag) {
+            CCJobRef2 job = pJobCreate(nyxZeroAllocator(), 0,
+                (__bridge CFArrayRef)baseArgs,
+                (__bridge CFArrayRef)@[ [NSURL fileURLWithPath:srcPath] ],
+                (__bridge CFURLRef)[NSURL fileURLWithPath:objPath]);
+            if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
+            if (pJobArgs) {
+                CFArrayRef full = pJobArgs(nyxZeroAllocator(), job);
+                if (full) {
+                    std::string dump = std::string(tag) + " argv：";
+                    CFIndex n = CFArrayGetCount(full);
+                    for (CFIndex i = 0; i < n; i++) {
+                        CFStringRef a = (CFStringRef)CFArrayGetValueAtIndex(full, i);
+                        dump += " [";
+                        dump += a ? ([(__bridge NSString *)a UTF8String] ?: "?") : "?";
+                        dump += "]";
+                    }
+                    line(dump);
+                    CFRelease(full);
+                }
+            }
             CFArrayRef diags = NULL;
             CFStringRef mainSrc = NULL;
-            Boolean success = pJobExecute(djob, &diags, &mainSrc);
-            line(std::string("直打 job 執行結果：") + (success ? "成功" : "失敗"));
-            nyxMark(success ? "direct job success" : "direct job failed");
+            Boolean success = pJobExecute(job, &diags, &mainSrc);
+            line(std::string(tag) + " 執行結果：" + (success ? "成功" : "失敗"));
             if (diags && pDiagLevel && pDiagMessage) {
                 CFIndex nd = CFArrayGetCount(diags);
                 for (CFIndex d = 0; d < nd; d++) {
@@ -547,8 +560,28 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             }
             if (diags) CFRelease(diags);
             if (mainSrc) CFRelease(mainSrc);
-            CFRelease(djob);
+            CFRelease(job);
+        };
+        NSArray *cc1Args = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+            @"-main-file-name", @"test.c", @"-isysroot", sdk,
+            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
+        NSArray *noCc1Args = @[@"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+            @"-main-file-name", @"test.c", @"-isysroot", sdk,
+            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"]];
+        runJob(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"], cc1Args, "A(cc1+錯誤源碼)");
+        runJob(src, [dir stringByAppendingPathComponent:@"test2.o"], noCc1Args, "B(無cc1+正確源碼)");
+        for (NSString *name in @[@"testerr.o", @"test2.o"]) {
+            NSString *pp = [dir stringByAppendingPathComponent:name];
+            if ([fm fileExistsAtPath:pp]) {
+                unsigned long long sz = [[fm attributesOfItemAtPath:pp error:nil] fileSize];
+                line("產物 " + std::string(name.UTF8String) + " 已生成，大小 " + std::to_string(sz));
+            } else {
+                line("產物 " + std::string(name.UTF8String) + " 不存在");
+            }
         }
+        nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
         unsigned long long sz = [[fm attributesOfItemAtPath:obj error:nil] fileSize];
