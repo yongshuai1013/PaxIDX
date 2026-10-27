@@ -1,0 +1,56 @@
+name: Build LLVM (Nyxian recipe, iOS 15, Swift 6.4)
+
+# 用 emexlab/LLVM-On-iOS 的構建腳本（只有 Makefile＋Scripts 的配方 repo），
+# 在 CI 裡現抓上游腳本倉庫釘定版，部署目標改 15.0 後跑 make all。
+# 產物：LLVM.xcframework（minos 15.0 原生）＋CoreCompilerSupportLibs＋SwiftToolchain.zip。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-llvm:
+    runs-on: macos-latest
+    timeout-minutes: 355
+    steps:
+      - name: Checkout emexlab/LLVM-On-iOS (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: emexlab/LLVM-On-iOS
+          ref: 5c2e215abf1f82fd3cfabba89d45b72e0b6bd8b9
+      - name: Switch deployment target to iOS 15.0
+        run: |
+          sed -i '' 's/darwin-deployment-version-ios=16.0/darwin-deployment-version-ios=15.0/' Scripts/swift-ios-toolchain-presets.ini
+          grep darwin-deployment-version-ios Scripts/swift-ios-toolchain-presets.ini
+      - name: Build (their Makefile)
+        env:
+          IOS_DEPLOYMENT_TARGET: "15.0"
+        run: |
+          make all OS_VER=15.0 SWIFT_BRANCH=swift-6.4.0-RELEASE
+      - name: Verify minos of produced dylibs
+        if: always()
+        run: |
+          ls -la LLVM.xcframework CoreCompilerSupportLibs 2>/dev/null | head -30
+          for f in CoreCompilerSupportLibs/*.dylib; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            vtool -show-build "$f" 2>/dev/null | grep -E 'platform|minos|sdk' || otool -l "$f" | grep -A3 LC_BUILD_VERSION | head -6
+          done
+      - name: Archive outputs
+        if: always()
+        run: |
+          [ -d LLVM.xcframework ] && tar -cJf LLVM.xcframework.tar.xz LLVM.xcframework || echo "no LLVM.xcframework"
+          [ -d CoreCompilerSupportLibs ] && tar -cJf CoreCompilerSupportLibs.tar.xz CoreCompilerSupportLibs || echo "no CoreCompilerSupportLibs"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LLVM-xcframework-ios15
+          path: |
+            LLVM.xcframework.tar.xz
+            CoreCompilerSupportLibs.tar.xz
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SwiftToolchain-iphoneos-ios15
+          path: SwiftToolchain.zip
+          if-no-files-found: warn
