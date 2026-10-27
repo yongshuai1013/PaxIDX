@@ -542,8 +542,8 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         }
         // ---- 探針 E：預定義宏實況（#error 標記，diag 直接拼出缺哪個宏） ----
     {
-        NSString *esrc = [work stringByAppendingPathComponent:@"probe.m"];
-        NSString *eobj = [work stringByAppendingPathComponent:@"probe.o"];
+        NSString *esrc = [dir stringByAppendingPathComponent:@"probe.m"];
+        NSString *eobj = [dir stringByAppendingPathComponent:@"probe.o"];
         NSString *es = @"#ifndef __GNUC__\n#error PROBE_GNUC_MISSING\n#elif __GNUC__ < 4\n#error PROBE_GNUC_LT4\n#endif\n"
                        @"#ifndef __clang__\n#error PROBE_CLANG_MISSING\n#endif\n"
                        @"#ifndef __APPLE__\n#error PROBE_APPLE_MISSING\n#endif\n"
