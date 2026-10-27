@@ -540,8 +540,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         } else {
             line("產物 testobjc.o 不存在");
         }
-    }
-    // ---- 探針 E：預定義宏實況（#error 標記，diag 直接拼出缺哪個宏） ----
+        // ---- 探針 E：預定義宏實況（#error 標記，diag 直接拼出缺哪個宏） ----
     {
         NSString *esrc = [work stringByAppendingPathComponent:@"probe.m"];
         NSString *eobj = [work stringByAppendingPathComponent:@"probe.o"];
@@ -559,6 +558,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             @"-fobjc-runtime=ios-15.0",
             @"-o", eobj, @"-x", @"objective-c", esrc];
         runJob(probeArgs, "E(預定義宏探針)");
+        }
         nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
