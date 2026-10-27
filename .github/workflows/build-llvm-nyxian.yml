@@ -1,7 +1,7 @@
 name: Build LLVM (Nyxian recipe, iOS 15, Swift 6.4)
 
-# 用 emexlab/LLVM-On-iOS 的構建腳本（只有 Makefile＋Scripts 的配方 repo），
-# 在 CI 裡現抓上游腳本倉庫釘定版，部署目標改 15.0 後跑 make all。
+# 構建腳本已 vendored 進本專案 Tools/LLVM-On-iOS/（來源 emexlab/LLVM-On-iOS
+# 釘定版 5c2e215a，MIT，LICENSE 隨附），preset 部署目標已改 15.0。
 # 產物：LLVM.xcframework（minos 15.0 原生）＋CoreCompilerSupportLibs＋SwiftToolchain.zip。
 
 on:
@@ -11,17 +11,15 @@ jobs:
   build-llvm:
     runs-on: macos-latest
     timeout-minutes: 355
+    defaults:
+      run:
+        working-directory: Tools/LLVM-On-iOS
     steps:
-      - name: Checkout emexlab/LLVM-On-iOS (pinned)
-        uses: actions/checkout@v4
-        with:
-          repository: emexlab/LLVM-On-iOS
-          ref: 5c2e215abf1f82fd3cfabba89d45b72e0b6bd8b9
-      - name: Switch deployment target to iOS 15.0
+      - uses: actions/checkout@v4
+      - name: Show vendored preset deployment target
         run: |
-          sed -i '' 's/darwin-deployment-version-ios=16.0/darwin-deployment-version-ios=15.0/' Scripts/swift-ios-toolchain-presets.ini
           grep darwin-deployment-version-ios Scripts/swift-ios-toolchain-presets.ini
-      - name: Build (their Makefile)
+      - name: Build (vendored Makefile)
         env:
           IOS_DEPLOYMENT_TARGET: "15.0"
         run: |
@@ -45,12 +43,12 @@ jobs:
         with:
           name: LLVM-xcframework-ios15
           path: |
-            LLVM.xcframework.tar.xz
-            CoreCompilerSupportLibs.tar.xz
+            Tools/LLVM-On-iOS/LLVM.xcframework.tar.xz
+            Tools/LLVM-On-iOS/CoreCompilerSupportLibs.tar.xz
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: SwiftToolchain-iphoneos-ios15
-          path: SwiftToolchain.zip
+          path: Tools/LLVM-On-iOS/SwiftToolchain.zip
           if-no-files-found: warn
