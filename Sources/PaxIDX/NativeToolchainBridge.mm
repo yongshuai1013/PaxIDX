@@ -583,6 +583,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
             @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
             [@"-F" stringByAppendingString:fw],
+            @"-resource-dir", [sdk stringByAppendingPathComponent:@"usr/lib/clang/19.1.5"],
             @"-fobjc-runtime=ios-15.0",
             @"-o", mobj, @"-x", @"objective-c", msrc];
         runJob(objcArgs, "D(ObjC+Foundation)");
