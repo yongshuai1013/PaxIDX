@@ -540,6 +540,25 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         } else {
             line("產物 testobjc.o 不存在");
         }
+    }
+    // ---- 探針 E：預定義宏實況（#error 標記，diag 直接拼出缺哪個宏） ----
+    {
+        NSString *esrc = [work stringByAppendingPathComponent:@"probe.m"];
+        NSString *eobj = [work stringByAppendingPathComponent:@"probe.o"];
+        NSString *es = @"#ifndef __GNUC__\n#error PROBE_GNUC_MISSING\n#elif __GNUC__ < 4\n#error PROBE_GNUC_LT4\n#endif\n"
+                       @"#ifndef __clang__\n#error PROBE_CLANG_MISSING\n#endif\n"
+                       @"#ifndef __APPLE__\n#error PROBE_APPLE_MISSING\n#endif\n"
+                       @"#ifndef __MACH__\n#error PROBE_MACH_MISSING\n#endif\n"
+                       @"#ifndef __OBJC__\n#error PROBE_OBJC_MISSING\n#endif\n"
+                       @"int probe_dummy;\n";
+        [es writeToFile:esrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        NSArray *probeArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+            @"-main-file-name", @"probe.m", @"-isysroot", sdk,
+            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            @"-fobjc-runtime=ios-15.0",
+            @"-o", eobj, @"-x", @"objective-c", esrc];
+        runJob(probeArgs, "E(預定義宏探針)");
         nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
