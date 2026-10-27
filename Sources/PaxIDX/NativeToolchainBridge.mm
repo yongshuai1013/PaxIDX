@@ -315,6 +315,35 @@ static void nyxInstallSigHandlers(void) {
     for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++) sigaction(sigs[i], &sa, nullptr);
 }
 
+
+// 零初始化分配器（對付 CoreCompiler 的 CCDriverInit 未構建
+// argStorage/argPtr 的原廠 bug）：CCDriverCreate 用我們傳入的
+// allocator 分配 driver 物件，改用 calloc 後物件記憶體全零，
+// 未構建的 SmallVector 以零狀態被 move-assign／grow 時行為正常。
+static void *nyxCallocAllocate(CFIndex size, CFOptionFlags hint, void *info) {
+    (void)hint; (void)info;
+    return calloc(1, size > 0 ? (size_t)size : 1);
+}
+static void *nyxRealloc(void *ptr, CFIndex newSize, CFOptionFlags hint, void *info) {
+    (void)hint; (void)info;
+    return realloc(ptr, newSize > 0 ? (size_t)newSize : 1);
+}
+static void nyxFree(void *ptr, void *info) { (void)info; free(ptr); }
+static CFIndex nyxPreferredSize(CFIndex size, CFOptionFlags hint, void *info) {
+    (void)hint; (void)info;
+    return size;
+}
+static CFAllocatorRef nyxZeroAllocator(void) {
+    CFAllocatorContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.version = 0;
+    ctx.allocate = nyxCallocAllocate;
+    ctx.reallocate = nyxRealloc;
+    ctx.deallocate = nyxFree;
+    ctx.preferredSize = nyxPreferredSize;
+    return CFAllocatorCreate(kCFAllocatorSystemDefault, &ctx);
+}
+
 typedef struct __CCJob *CCJobRef2;
 typedef struct __CCDriver *CCDriverRef2;
 typedef struct __CCDiagnostic *CCDiagnosticRef2;
@@ -388,11 +417,11 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     // CreateJobs，用來分離「環境／記憶體問題」與「我們的引數／SDK 路徑問題」
     {
         NSArray *probeArgs = @[@"-c", src, @"-o", obj];
-        CCDriverRef2 probe = pDriverCreate(kCFAllocatorSystemDefault,
+        CCDriverRef2 probe = pDriverCreate(nyxZeroAllocator(),
                                             (__bridge CFArrayRef)probeArgs, 0);
         if (probe) {
             nyxMark("probe driver created");
-            CFArrayRef probeJobs = pDriverJobs(kCFAllocatorSystemDefault, probe);
+            CFArrayRef probeJobs = pDriverJobs(nyxZeroAllocator(), probe);
             { char b[64]; snprintf(b, sizeof(b), "probe jobs n=%ld", probeJobs ? (long)CFArrayGetCount(probeJobs) : -1L); nyxMark(b); }
             if (probeJobs) CFRelease(probeJobs);
             CFRelease(probe);
@@ -415,7 +444,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     NSArray *args = @[@"-target", @"arm64-apple-ios15.0", @"-isysroot", sdk,
                       @"-c", src, @"-o", obj];
     nyxMark("src+sdk ready");
-    CCDriverRef2 driver = pDriverCreate(kCFAllocatorSystemDefault,
+    CCDriverRef2 driver = pDriverCreate(nyxZeroAllocator(),
                                          (__bridge CFArrayRef)args, 0);
     if (!driver) {
         line("CCDriverCreate 回傳空（driver 建立失敗）");
@@ -427,7 +456,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     nyxMark("calling CreateJobs");
     CFArrayRef jobs = nullptr;
     try {
-        jobs = pDriverJobs(kCFAllocatorSystemDefault, driver);
+        jobs = pDriverJobs(nyxZeroAllocator(), driver);
     } catch (...) {
         nyxMark("EXCEPTION in CreateJobs");
         line("CCDriverCreateJobs 丟出 C++ 例外（已攔截）");
