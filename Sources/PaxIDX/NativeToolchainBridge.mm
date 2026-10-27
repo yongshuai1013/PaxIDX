@@ -529,14 +529,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         nyxMark("direct v2 start");
         NSString *errSrc = [dir stringByAppendingPathComponent:@"testerr.c"];
         [@"int main(void) { return oops }\n" writeToFile:errSrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        auto runJob = [&](NSString *srcPath, NSString *objPath, const char *tag) {
+        auto runJob = [&](NSArray *fullArgs, const char *tag) {
             // 0.11.4 契約：job 只存一份完整 argv（就是 driver 命令的原樣，
             // 含 -o 與輸入檔），CCJobGetArguments 原樣交給 CreateFromArgs。
-            NSArray *fullArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
-                @"-main-file-name", [srcPath lastPathComponent], @"-isysroot", sdk,
-                @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
-                @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
-                @"-o", objPath, @"-x", @"c", srcPath];
             CCJobRef2 job = pJobCreate(nyxZeroAllocator(), 0, (__bridge CFArrayRef)fullArgs);
             if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
             if (pJobType) { char b[32]; snprintf(b, sizeof(b), "%s type=%d", tag, (int)pJobType(job)); line(b); }
@@ -567,9 +562,36 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             if (mainSrc) CFRelease(mainSrc);
             CFRelease(job);
         };
-        runJob(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"], "A(錯誤源碼)");
-        runJob([dir stringByAppendingPathComponent:@"nope_missing.c"], [dir stringByAppendingPathComponent:@"nope.o"], "C(不存在的輸入檔)");
-        runJob(src, obj, "B(正確源碼)");
+        auto cArgs = [&](NSString *srcPath, NSString *objPath) {
+            return @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+                @"-main-file-name", [srcPath lastPathComponent], @"-isysroot", sdk,
+                @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+                @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+                @"-o", objPath, @"-x", @"c", srcPath];
+        };
+        runJob(cArgs(errSrc, [dir stringByAppendingPathComponent:@"testerr.o"]), "A(錯誤源碼)");
+        runJob(cArgs([dir stringByAppendingPathComponent:@"nope_missing.c"], [dir stringByAppendingPathComponent:@"nope.o"]), "C(不存在的輸入檔)");
+        runJob(cArgs(src, obj), "B(正確源碼)");
+        // D：ObjC＋Foundation 頭——-x objective-c、-F 框架搜尋路徑、objc runtime
+        NSString *msrc = [dir stringByAppendingPathComponent:@"test.m"];
+        NSString *mobj = [dir stringByAppendingPathComponent:@"testobjc.o"];
+        [@"#import <Foundation/Foundation.h>\nint main(void) { @autoreleasepool { NSString *s = @\"hi\"; NSLog(@\"%@\", s); } return 0; }\n"
+            writeToFile:msrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        NSString *fw = [sdk stringByAppendingPathComponent:@"System/Library/Frameworks"];
+        NSArray *objcArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
+            @"-main-file-name", @"test.m", @"-isysroot", sdk,
+            @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
+            [@"-F" stringByAppendingString:fw],
+            @"-fobjc-runtime=ios-15.0",
+            @"-o", mobj, @"-x", @"objective-c", msrc];
+        runJob(objcArgs, "D(ObjC+Foundation)");
+        if ([fm fileExistsAtPath:mobj]) {
+            unsigned long long sz = [[fm attributesOfItemAtPath:mobj error:nil] fileSize];
+            line("產物 testobjc.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+        } else {
+            line("產物 testobjc.o 不存在");
+        }
         nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
