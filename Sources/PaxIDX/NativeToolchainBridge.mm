@@ -507,12 +507,29 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
         [@"#import <Foundation/Foundation.h>\nint main(void) { @autoreleasepool { NSString *s = @\"hi\"; NSLog(@\"%@\", s); } return 0; }\n"
             writeToFile:msrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
         NSString *fw = [sdk stringByAppendingPathComponent:@"System/Library/Frameworks"];
+        // resource-dir 實地探測：列出 usr/lib/clang 下的版本目錄，找第一個
+        // include/stdarg.h 真實存在的；也探 swift 鏡像佈局。印出來對帳。
+        NSString *resourceDir = nil;
+        {
+            NSString *clangBase = [sdk stringByAppendingPathComponent:@"usr/lib/clang"];
+            NSArray *vers = [fm contentsOfDirectoryAtPath:clangBase error:nil];
+            line("usr/lib/clang 目錄內容：" + std::string(vers ? [[vers componentsJoinedByString:@", "] UTF8String] : "(讀不到)"));
+            for (NSString *v in vers ?: @[]) {
+                NSString *cand = [clangBase stringByAppendingPathComponent:v];
+                if ([fm fileExistsAtPath:[cand stringByAppendingPathComponent:@"include/stdarg.h"]]) { resourceDir = cand; break; }
+            }
+            if (!resourceDir) {
+                NSString *mirror = [sdk stringByAppendingPathComponent:@"usr/lib/swift/clang"];
+                if ([fm fileExistsAtPath:[mirror stringByAppendingPathComponent:@"include/stdarg.h"]]) resourceDir = mirror;
+            }
+            line("resource-dir 選用：" + std::string(resourceDir ? resourceDir.UTF8String : "(無可用內建頭)"));
+        }
         NSArray *objcArgs = @[@"-cc1", @"-triple", @"arm64-apple-ios15.0", @"-emit-obj",
             @"-main-file-name", @"test.m", @"-isysroot", sdk,
             @"-internal-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
             @"-internal-externc-isystem", [sdk stringByAppendingPathComponent:@"usr/include"],
             [@"-F" stringByAppendingString:fw],
-            @"-resource-dir", [sdk stringByAppendingPathComponent:@"usr/lib/clang/19.1.5"],
+            @"-resource-dir", resourceDir ?: [sdk stringByAppendingPathComponent:@"usr/lib/clang/19.1.5"],
             @"-fobjc-runtime=ios-15.0",
             @"-o", mobj, @"-x", @"objective-c", msrc];
         runJob(objcArgs, "D(ObjC+Foundation)");
