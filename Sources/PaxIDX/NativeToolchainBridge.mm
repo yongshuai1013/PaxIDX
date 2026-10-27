@@ -10,6 +10,7 @@
 #include <mach/mach.h>
 #include <dispatch/dispatch.h>
 #include <string>
+#include <atomic>
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
@@ -361,6 +362,16 @@ typedef CFArrayRef (*CCJobGetInputFileURLsFn)(CCJobRef2);
 typedef uint8_t (*CCJobGetTypeFn)(CCJobRef2);
 
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
+    static std::atomic<bool> s_running{false};
+    if (s_running.exchange(true)) {
+        const char *msg = "已有一次試編正在執行，本次點擊已忽略\n";
+        size_t n = strlen(msg);
+        if (n >= capacity) n = capacity - 1;
+        memcpy(buffer, msg, n);
+        buffer[n] = '\0';
+        return 2;
+    }
+    struct RunningGuard { std::atomic<bool> &f; ~RunningGuard() { f.store(false); } } guard{s_running};
     std::string report;
     auto line = [&](const std::string &t) { report += t; report += "\n"; };
     { FILE *f = fopen(nyxProgressPath().UTF8String, "w"); if (f) fclose(f); }
@@ -432,96 +443,14 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     }
     line("源文件：" + std::string(src.UTF8String));
     line("SDK：" + std::string(sdk.UTF8String));
-    // 探針 A：極簡引數（不帶 -target/-isysroot）的 driver 先跑一次
-    // CreateJobs，用來分離「環境／記憶體問題」與「我們的引數／SDK 路徑問題」
-    {
-        NSArray *probeArgs = @[@"-c", src, @"-o", obj];
-        CCDriverRef2 probe = pDriverCreate(nyxZeroAllocator(),
-                                            (__bridge CFArrayRef)probeArgs, 0);
-        if (probe) {
-            nyxMark("probe driver created");
-            CFArrayRef probeJobs = pDriverJobs(nyxZeroAllocator(), probe);
-            { char b[64]; snprintf(b, sizeof(b), "probe jobs n=%ld", probeJobs ? (long)CFArrayGetCount(probeJobs) : -1L); nyxMark(b); }
-            if (probeJobs) CFRelease(probeJobs);
-            CFRelease(probe);
-            nyxMark("probe done");
-        } else {
-            nyxMark("probe driver create failed");
-        }
-    }
-    // 記憶體證據：印出 CreateJobs 前的 phys_footprint
-    {
-        struct task_vm_info info;
-        mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
-        if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &cnt) == KERN_SUCCESS) {
-            char b[96];
-            snprintf(b, sizeof(b), "footprint before real CreateJobs = %llu MB",
-                     info.phys_footprint / (1024 * 1024));
-            nyxMark(b);
-        }
-    }
-    NSArray *args = @[@"-target", @"arm64-apple-ios15.0", @"-isysroot", sdk,
-                      @"-c", src, @"-o", obj];
-    nyxMark("src+sdk ready");
-    CCDriverRef2 driver = pDriverCreate(nyxZeroAllocator(),
-                                         (__bridge CFArrayRef)args, 0);
-    if (!driver) {
-        line("CCDriverCreate 回傳空（driver 建立失敗）");
-        copyDiag(report.c_str(), buffer, capacity);
-        return 1;
-    }
-    nyxMark("driver created");
-    line("driver 建立成功");
-    nyxMark("calling CreateJobs");
-    CFArrayRef jobs = nullptr;
-    try {
-        jobs = pDriverJobs(nyxZeroAllocator(), driver);
-    } catch (...) {
-        nyxMark("EXCEPTION in CreateJobs");
-        line("CCDriverCreateJobs 丟出 C++ 例外（已攔截）");
-        copyDiag(report.c_str(), buffer, capacity);
-        return 1;
-    }
-    CFIndex njobs = jobs ? CFArrayGetCount(jobs) : 0;
-    { char b[64]; snprintf(b, sizeof(b), "jobs created n=%ld", (long)njobs); nyxMark(b); }
-    if (pDriverSysroot) {
-        CFURLRef sr = pDriverSysroot(driver);
-        nyxMark(sr ? [[(__bridge NSURL *)sr path] UTF8String] : "sysroot=NULL");
-        if (sr) CFRelease(sr);
-    }
-    line("driver 產出 job 數：" + std::to_string((long)njobs));
+    // driver 層已移除：CCDriverCreateJobs 對我們的參數恆產 0 job，
+    // 且其未構建 SmallVector bug 有機率在 CreateJobs 內 abort
+    // （#106 真機在 CreateJobs+124 閃退實證）。直打 CCJob 路徑已證明
+    // 完整可用（C/ObjC 皆可編），driver 層不再碰。
+    nyxMark("driver skipped");
+    line("driver 層已略過（恆 0 job 且有閃退風險），直接走 CCJob");
     static const char *kLevelNames[] = {"note", "remark", "warning", "error", "fatal", "unknown"};
     bool ok = false;
-    for (CFIndex i = 0; i < njobs; i++) {
-        CCJobRef2 job = (CCJobRef2)CFArrayGetValueAtIndex(jobs, i);
-        if (pJobOutput) {
-            CFURLRef out = pJobOutput(job);
-            if (out) {
-                line("job 輸出：" + std::string([(__bridge NSURL *)out path].UTF8String ?: ""));
-            }
-        }
-        { char b[64]; snprintf(b, sizeof(b), "executing job %ld", (long)i); nyxMark(b); }
-        CFArrayRef diags = NULL;
-        CFStringRef mainSrc = NULL;
-        Boolean success = pJobExecute(job, &diags, &mainSrc);
-        line(std::string("job ") + std::to_string((long)i) + " 執行結果：" + (success ? "成功" : "失敗"));
-        if (diags && pDiagLevel && pDiagMessage) {
-            CFIndex nd = CFArrayGetCount(diags);
-            for (CFIndex d = 0; d < nd; d++) {
-                CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
-                uint8_t lv = pDiagLevel(dg);
-                CFStringRef msg = pDiagMessage(dg);
-                std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
-                line(std::string("  diag[") + kLevelNames[lv <= 5 ? lv : 5] + "] " + m);
-            }
-        }
-        if (diags) CFRelease(diags);
-        if (mainSrc) CFRelease(mainSrc);
-        ok = ok || success;
-    }
-    nyxMark("jobs done");
-    if (jobs) CFRelease(jobs);
-    CFRelease(driver);
     // 直打 CCJob 探針 v2：A=帶 -cc1＋故意寫錯的源碼（驗前端是否真解析，
     // 真解析必回錯誤診斷）；B=不帶 -cc1＋正確源碼（驗 CreateFromArgs 契約
     // 與 .o 產出）。兩邊都先印出 CCJobCreateArguments 組出的最終 argv。
