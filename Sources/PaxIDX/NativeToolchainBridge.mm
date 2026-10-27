@@ -356,6 +356,9 @@ typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
 typedef CCJobRef2 (*CCJobCreateFn)(CFAllocatorRef, uint8_t, CFArrayRef, CFArrayRef, CFURLRef);
 typedef CFURLRef (*CCDriverCopySysrootURLFn)(CCDriverRef2);
 typedef CFArrayRef (*CCJobCreateArgumentsFn)(CFAllocatorRef, CCJobRef2);
+typedef CFArrayRef (*CCJobGetBaseArgumentsFn)(CCJobRef2);
+typedef CFArrayRef (*CCJobGetInputFileURLsFn)(CCJobRef2);
+typedef uint8_t (*CCJobGetTypeFn)(CCJobRef2);
 
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     std::string report;
@@ -399,6 +402,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     auto pJobCreate = (CCJobCreateFn)sym("CCJobCreate");
     auto pDriverSysroot = (CCDriverCopySysrootURLFn)sym("CCDriverCopySysrootURL");
     auto pJobArgs = (CCJobCreateArgumentsFn)sym("CCJobCreateArguments");
+    auto pJobBase = (CCJobGetBaseArgumentsFn)sym("CCJobGetBaseArguments");
+    auto pJobInputs = (CCJobGetInputFileURLsFn)sym("CCJobGetInputFileURLs");
+    auto pJobType = (CCJobGetTypeFn)sym("CCJobGetType");
     nyxMark("symbols ok");
     if (!pDriverCreate || !pDriverJobs || !pJobExecute) {
         copyDiag(report.c_str(), buffer, capacity);
@@ -529,6 +535,35 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 (__bridge CFArrayRef)@[ [NSURL fileURLWithPath:srcPath] ],
                 (__bridge CFURLRef)[NSURL fileURLWithPath:objPath]);
             if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
+            if (pJobType) { char b[32]; snprintf(b, sizeof(b), "%s type=%d", tag, (int)pJobType(job)); line(b); }
+            if (pJobBase) {
+                CFArrayRef ba = pJobBase(job);
+                std::string dump = std::string(tag) + " baseArgs：";
+                if (ba) {
+                    CFIndex n = CFArrayGetCount(ba);
+                    for (CFIndex i = 0; i < n; i++) {
+                        CFStringRef a = (CFStringRef)CFArrayGetValueAtIndex(ba, i);
+                        dump += " [";
+                        dump += a ? ([(__bridge NSString *)a UTF8String] ?: "?") : "?";
+                        dump += "]";
+                    }
+                } else { dump += "(null)"; }
+                line(dump);
+            }
+            if (pJobInputs) {
+                CFArrayRef ia = pJobInputs(job);
+                std::string dump = std::string(tag) + " inputs：";
+                if (ia) {
+                    CFIndex n = CFArrayGetCount(ia);
+                    for (CFIndex i = 0; i < n; i++) {
+                        CFURLRef u = (CFURLRef)CFArrayGetValueAtIndex(ia, i);
+                        dump += " [";
+                        dump += u ? ([(__bridge NSURL *)u path].UTF8String ?: "?") : "?";
+                        dump += "]";
+                    }
+                } else { dump += "(null)"; }
+                line(dump);
+            }
             if (pJobArgs) {
                 CFArrayRef full = pJobArgs(nyxZeroAllocator(), job);
                 if (full) {
@@ -556,6 +591,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             } else {
                 line(std::string(tag) + " mainSource=(null)");
             }
+            line(std::string(tag) + (diags ? " diag 數：" + std::to_string((long)CFArrayGetCount(diags)) : " diag 陣列=NULL"));
             if (diags && pDiagLevel && pDiagMessage) {
                 CFIndex nd = CFArrayGetCount(diags);
                 for (CFIndex d = 0; d < nd; d++) {
