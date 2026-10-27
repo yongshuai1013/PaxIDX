@@ -561,6 +561,59 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             @"-o", eobj, @"-x", @"objective-c", esrc];
         runJob(probeArgs, "E(預定義宏探針)");
         }
+        // ---- F：連結 job（type=4，CCLinkerJobExecute -> lld::lldMain Darwin） ----
+        // 0.11.4 契約：argv 是 ld64.lld 參數（argv[0] 由對方注入），診斷是
+        // 一條裝著整份 lld stderr 的 CCDiagnostic。
+        {
+            auto runLinkJob = [&](NSArray *fullArgs, const char *tag) {
+                CCJobRef2 job = pJobCreate(nyxZeroAllocator(), 4, (__bridge CFArrayRef)fullArgs);
+                if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
+                if (pJobType) { char b[32]; snprintf(b, sizeof(b), "%s type=%d", tag, (int)pJobType(job)); line(b); }
+                CFArrayRef diags = NULL;
+                CFStringRef mainSrc = NULL;
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+                Boolean success = pJobExecute(job, &diags, &mainSrc);
+                CFAbsoluteTime dt = CFAbsoluteTimeGetCurrent() - t0;
+                line(std::string(tag) + " 執行結果：" + (success ? "成功" : "失敗"));
+                { char b[64]; snprintf(b, sizeof(b), "%s 耗時 %.0f ms", tag, dt * 1000.0); line(b); }
+                line(std::string(tag) + (diags ? " diag 數：" + std::to_string((long)CFArrayGetCount(diags)) : " diag 陣列=NULL"));
+                if (diags && pDiagLevel && pDiagMessage) {
+                    CFIndex nd = CFArrayGetCount(diags);
+                    for (CFIndex d = 0; d < nd; d++) {
+                        CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
+                        uint8_t lv = pDiagLevel(dg);
+                        CFStringRef msg = pDiagMessage(dg);
+                        std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
+                        line(std::string("  diag[") + kLevelNames[lv <= 5 ? lv : 5] + "] " + m);
+                    }
+                }
+                if (diags) CFRelease(diags);
+                if (mainSrc) CFRelease(mainSrc);
+                CFRelease(job);
+            };
+            NSString *fwDir = [sdk stringByAppendingPathComponent:@"System/Library/Frameworks"];
+            NSString *cApp = [dir stringByAppendingPathComponent:@"testc_app"];
+            runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                @"-syslibroot", sdk, @"-o", cApp, obj, @"-lSystem"], "F-C(純C連結)");
+            if ([fm fileExistsAtPath:cApp]) {
+                unsigned long long sz = [[fm attributesOfItemAtPath:cApp error:nil] fileSize];
+                line("產物 testc_app 已生成，大小 " + std::to_string(sz) + " 位元組");
+            } else {
+                line("產物 testc_app 不存在");
+            }
+            NSString *mApp = [dir stringByAppendingPathComponent:@"testapp"];
+            NSString *mo = [dir stringByAppendingPathComponent:@"testobjc.o"];
+            runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                @"-syslibroot", sdk, @"-o", mApp, mo,
+                [@"-F" stringByAppendingString:fwDir],
+                @"-framework", @"Foundation", @"-lobjc", @"-lSystem"], "F-ObjC(Foundation連結)");
+            if ([fm fileExistsAtPath:mApp]) {
+                unsigned long long sz = [[fm attributesOfItemAtPath:mApp error:nil] fileSize];
+                line("產物 testapp 已生成，大小 " + std::to_string(sz) + " 位元組");
+            } else {
+                line("產物 testapp 不存在");
+            }
+        }
         nyxMark("direct v2 done");
     }
     if ([fm fileExistsAtPath:obj]) {
