@@ -96,8 +96,11 @@ jobs:
             echo "nyx_test：內嵌原始 SDK 的 usr/lib/swift 介面集（S 段影子 SDK 用）"
             curl -sSL -o /tmp/darwin-sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
             mkdir -p /tmp/sdkx build/ipa/Payload/PaxIDX.app/NyxInterfaces
-            unzip -o -q /tmp/darwin-sdk.zip "iPhoneOS.sdk/usr/lib/swift/*" -d /tmp/sdkx
-            cp -R /tmp/sdkx/iPhoneOS.sdk/usr/lib/swift/. build/ipa/Payload/PaxIDX.app/NyxInterfaces/
+            unzip -l /tmp/darwin-sdk.zip | head -5
+            unzip -o -q /tmp/darwin-sdk.zip "*/usr/lib/swift/*" -d /tmp/sdkx
+            SWIFTDIR=$(find /tmp/sdkx -type d -path "*/usr/lib/swift" | head -1)
+            echo "介面集來源：$SWIFTDIR"
+            cp -R "$SWIFTDIR/." build/ipa/Payload/PaxIDX.app/NyxInterfaces/
             ls build/ipa/Payload/PaxIDX.app/NyxInterfaces/ | head -5
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
