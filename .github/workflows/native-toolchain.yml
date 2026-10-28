@@ -607,7 +607,7 @@ jobs:
           test -n "$SWIFTC_PATH"
           test -x "$SWIFTC_PATH"
           "$SWIFTC_PATH" --version
-          "$SWIFTC_PATH" --version | grep -F 'swift-6.4.0-RELEASE'
+          "$SWIFTC_PATH" --version | grep -F 'swift-6.4-RELEASE'
           echo "HOST_SWIFT_640_BIN=$(dirname "$SWIFTC_PATH")" >> "$GITHUB_ENV"
 
       - name: Configure the Swift frontend for iPhoneOS
