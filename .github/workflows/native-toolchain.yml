@@ -37,11 +37,11 @@ on:
       swift_ref:
         description: swiftlang/swift tag or branch
         type: string
-        default: swift-6.2.4-RELEASE
+        default: swift-6.4.0-RELEASE
       swift_llvm_ref:
         description: swiftlang/llvm-project branch paired with swift_ref
         type: string
-        default: swift/release/6.2
+        default: swift/release/6.4
       llvm_ref:
         description: Upstream LLVM tag (e.g. llvmorg-18.1.0); used when with_swift=false
         type: string
@@ -84,8 +84,8 @@ jobs:
       contents: write
     env:
       IOS_DEPLOYMENT_TARGET: ${{ inputs.deployment_target || '17.0' }}
-      SWIFT_REF: ${{ inputs.swift_ref || 'swift-6.2.4-RELEASE' }}
-      SWIFT_LLVM_REF: ${{ inputs.swift_llvm_ref || 'swift/release/6.2' }}
+      SWIFT_REF: ${{ inputs.swift_ref || 'swift-6.4.0-RELEASE' }}
+      SWIFT_LLVM_REF: ${{ inputs.swift_llvm_ref || 'swift/release/6.4' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -121,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: yongshuai1013/swift
-          ref: paxidx-ios15
+          ref: paxidx-ios15-64
           path: swift
           fetch-depth: 1
 
@@ -133,7 +133,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: swiftlang/swift-cmark
-          ref: release/6.2
+          ref: release/6.4
           path: swift-cmark
           fetch-depth: 1
 
@@ -193,7 +193,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: swiftlang/swift-syntax
-          ref: release/6.2
+          ref: release/6.4
           path: swift-syntax
           fetch-depth: 1
 
@@ -202,7 +202,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: swiftlang/swift-experimental-string-processing
-          ref: release/6.2
+          ref: release/6.4
           path: swift-experimental-string-processing
           fetch-depth: 1
 
@@ -549,15 +549,15 @@ jobs:
             echo "reusable=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Restore the host Swift 6.2.4 toolchain
+      - name: Restore the host Swift 6.4.0 toolchain
         if: ${{ inputs.with_swift }}
         id: host-swift-cache
         uses: actions/cache/restore@v4
         with:
           path: host-swift-toolchain
-          key: host-swift-6.2.4-osx-toolchain-v1
+          key: host-swift-6.4.0-osx-toolchain-v1
 
-      - name: Fetch the host Swift 6.2.4 toolchain
+      - name: Fetch the host Swift 6.4.0 toolchain
         if: ${{ inputs.with_swift && steps.host-swift-cache.outputs.cache-hit != 'true' }}
         shell: bash
         run: |
@@ -565,15 +565,15 @@ jobs:
           # Generating the iphoneos stdlib modules shells out to
           # ${SWIFT_NATIVE_SWIFT_TOOLS_PATH}/swiftc, which must be a
           # HOST-runnable swiftc of the SAME version as the stdlib sources
-          # (6.2.4). Xcode 16.4's swiftc is 6.1.2 and rejects current stdlib
+          # (6.4.0). Xcode's bundled swiftc lags the release and rejects current stdlib
           # source/flags; llvm-host-build/bin holds only LLVM tools and has
           # no swiftc at all. The official swift.org macOS toolchain package
           # provides the matching host swiftc plus its host plugins.
-          curl -fL --retry 3 -o /tmp/swift-6.2.4-RELEASE-osx.pkg \
-            "https://download.swift.org/swift-6.2.4-release/xcode/swift-6.2.4-RELEASE/swift-6.2.4-RELEASE-osx.pkg"
+          curl -fL --retry 3 -o /tmp/swift-6.4.0-RELEASE-osx.pkg \
+            "https://download.swift.org/swift-6.4.0-release/xcode/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE-osx.pkg"
           rm -rf /tmp/swift-pkg-x host-swift-toolchain
           mkdir -p /tmp/swift-pkg-x/extracted
-          xar -xf /tmp/swift-6.2.4-RELEASE-osx.pkg -C /tmp/swift-pkg-x
+          xar -xf /tmp/swift-6.4.0-RELEASE-osx.pkg -C /tmp/swift-pkg-x
           # pkgutil --expand-full (tried in run #25) expands the package
           # without materializing a usr/bin/swiftc file anywhere in the
           # tree, so extract each component Payload (gzip cpio) directly
@@ -591,14 +591,14 @@ jobs:
           mkdir -p host-swift-toolchain
           cp -a "$TC_ROOT" host-swift-toolchain/
 
-      - name: Save the host Swift 6.2.4 toolchain
+      - name: Save the host Swift 6.4.0 toolchain
         if: ${{ inputs.with_swift && steps.host-swift-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           key: ${{ steps.host-swift-cache.outputs.cache-primary-key }}
           path: host-swift-toolchain
 
-      - name: Locate the host Swift 6.2.4 toolchain
+      - name: Locate the host Swift 6.4.0 toolchain
         if: ${{ inputs.with_swift }}
         shell: bash
         run: |
@@ -606,8 +606,8 @@ jobs:
           SWIFTC_PATH="$(find "$PWD/host-swift-toolchain" -path '*usr/bin/swiftc' -print -quit)"
           test -n "$SWIFTC_PATH"
           test -x "$SWIFTC_PATH"
-          "$SWIFTC_PATH" --version | grep -F 'Swift version 6.2.4'
-          echo "HOST_SWIFT_624_BIN=$(dirname "$SWIFTC_PATH")" >> "$GITHUB_ENV"
+          "$SWIFTC_PATH" --version | grep -F 'Swift version 6.4.0'
+          echo "HOST_SWIFT_640_BIN=$(dirname "$SWIFTC_PATH")" >> "$GITHUB_ENV"
 
       - name: Configure the Swift frontend for iPhoneOS
         if: ${{ inputs.with_swift && (steps.swift-cache.outputs.cache-hit != 'true' || steps.swift-tree.outputs.reusable != 'true') }}
@@ -648,7 +648,7 @@ jobs:
             -DCLANG_TABLEGEN="$PWD/llvm-host-build/bin/clang-tblgen" \
             -DSWIFT_NATIVE_LLVM_TOOLS_PATH="$PWD/llvm-host-build/bin" \
             -DSWIFT_NATIVE_CLANG_TOOLS_PATH="$PWD/llvm-host-build/bin" \
-            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$HOST_SWIFT_624_BIN" \
+            -DSWIFT_NATIVE_SWIFT_TOOLS_PATH="$HOST_SWIFT_640_BIN" \
             -DSWIFT_PATH_TO_CMARK_BUILD="$PWD/cmark-ios-build" \
             -DSWIFT_PATH_TO_CMARK_SOURCE="$PWD/swift-cmark" \
             -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$PWD/swift-experimental-string-processing" \
@@ -988,7 +988,7 @@ jobs:
             mv /tmp/archives-filtered.txt /tmp/archives.txt
           fi
           test -s /tmp/archives.txt
-          # 打包 6.2 的 iOS Swift 模塊（.swiftmodule），App 會覆蓋到 SDK 的 usr/lib/swift
+          # 打包 6.4 的 iOS Swift 模塊（.swiftmodule），App 會覆蓋到 SDK 的 usr/lib/swift
           # 硬性要求：必須找到 Swift.swiftmodule，找不到直接紅燈——舊版在這裡靜默
           # 跳過（|| true＋空目錄），害 release 從來沒有模塊包、App 疊加無從談起。
           if [ "${{ inputs.with_swift }}" = "true" ]; then
@@ -1002,33 +1002,33 @@ jobs:
             # 補齊本機構建沒生成的 stdlib 模塊（_Concurrency／_StringProcessing／
             # _FoundationCollections 在 iphoneos host-variant 配置下無 ninja 目標，
             # 2026-10-26 真機實證：缺了它們，前端只能退回 SDK 自帶的 Apple 6.1.2
-            # 接口、被版本檢查拒讀）。官方 swift.org 6.2.4 主機工具鏈與本前端同一個
+            # 接口、被版本檢查拒讀）。官方 swift.org 6.4.0 主機工具鏈與本前端同一個
             # tag 構建、自帶 iphoneos 全套模塊——缺哪個從它那裡補哪個，已有的
             # （自家生成的 Swift／SwiftOnoneSupport）不覆蓋。
             # 補齊缺失模塊（run #38／#39 教訓：(1) 固定路徑假設錯 (2) 全樹搜尋先
             # 撞到 swift_static/embedded 變體，不是 iphoneos 的 (3) macOS bash 3.2
             # 下 $name 緊貼中文括號會被誤解析成亂碼變量名——變量一律加 ${}）。
             # 這輪把候選來源一次盤清：先官方 pkg 的 usr/lib/swift/iphoneos，
-            # 再 runner 上各 Xcode 的 iPhoneOS SDK（接口須為 6.2 世代）；
+            # 再 runner 上各 Xcode 的 iPhoneOS SDK（接口須為 6.4 世代）；
             # 兩處都沒有就紅燈停下，不再猜第三個來源。
             echo "=== 候選來源盤點 ==="
             ls /Applications | grep -i xcode || true
-            PKG_SWIFT_DIR="${HOST_SWIFT_624_BIN}/../lib/swift"
+            PKG_SWIFT_DIR="${HOST_SWIFT_640_BIN}/../lib/swift"
             echo "--- 官方工具鏈 lib/swift 平台目錄 ---"
             ls "${PKG_SWIFT_DIR}" || true
             echo "--- 官方工具鏈 lib/swift/iphoneos ---"
             ls "${PKG_SWIFT_DIR}/iphoneos" || echo "(no iphoneos dir)"
             PICK_DIR=""
             PICK_SRC=""
-            if [ -d "${PKG_SWIFT_DIR}/iphoneos/_Concurrency.swiftmodule" ]; then
+            if [ -d "${PKG_SWIFT_DIR}/iphoneos/_Concurrency.swiftmodule" ] && head -10 "${PKG_SWIFT_DIR}/iphoneos/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface" 2>/dev/null | grep -q 'Swift version 6\.4'; then
               PICK_DIR="${PKG_SWIFT_DIR}/iphoneos"
-              PICK_SRC="official-6.2.4-host-toolchain"
+              PICK_SRC="official-6.4.0-host-toolchain"
             else
               for sdk in /Applications/Xcode*.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS*.sdk; do
                 [ -d "${sdk}/usr/lib/swift/_Concurrency.swiftmodule" ] || continue
-                if head -10 "${sdk}/usr/lib/swift/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface" 2>/dev/null | grep -q 'Swift version 6\.2'; then
+                if head -10 "${sdk}/usr/lib/swift/_Concurrency.swiftmodule/arm64-apple-ios.swiftinterface" 2>/dev/null | grep -q 'Swift version 6\.4'; then
                   PICK_DIR="${sdk}/usr/lib/swift"
-                  PICK_SRC="runner-Xcode-SDK-6.2"
+                  PICK_SRC="runner-Xcode-SDK-6.4"
                   break
                 fi
               done
@@ -1069,7 +1069,7 @@ jobs:
                 fi
               done
             else
-              echo "::warning::no 6.2-gen iphoneos _Concurrency module in either candidate source"
+              echo "::warning::no 6.4-gen iphoneos _Concurrency module in either candidate source"
             fi
             if [ ! -d "dist/swift-stdlib-ios/_Concurrency.swiftmodule" ]; then
               echo "::error::補齊後仍缺 _Concurrency.swiftmodule，模塊包不完整"
@@ -1077,7 +1077,7 @@ jobs:
             fi
             ls -R dist/swift-stdlib-ios | head -60
             if [ ! -d "dist/swift-stdlib-ios/Swift.swiftmodule" ]; then
-              echo "::error::沒找到 6.2.4 生成的 Swift.swiftmodule，stdlib 模塊目標沒生效"
+              echo "::error::沒找到 6.4.0 生成的 Swift.swiftmodule，stdlib 模塊目標沒生效"
               exit 1
             fi
           fi
