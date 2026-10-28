@@ -572,30 +572,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 CFArrayRef diags = NULL;
                 CFStringRef mainSrc = NULL;
                 CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
-                // Swift job（type 2/3）的 invocation 級錯誤走預設 printing
-                // consumer 寫進 stderr、不進捕獲陣列（前兩輪皆零診斷之因）。
-                // 執行前把 fd 1/2 轉到檔案，執行後整段讀回報告。
-                NSString *errFile = nil;
-                int savedOut = -1, savedErr = -1;
-                FILE *errFp = NULL;
-                if (type == 2 || type == 3) {
-                    errFile = [dir stringByAppendingPathComponent:@"swift_stderr.txt"];
-                    [fm removeItemAtPath:errFile error:nil];
-                    fflush(stdout); fflush(stderr);
-                    savedOut = dup(1); savedErr = dup(2);
-                    errFp = fopen(errFile.UTF8String, "w");
-                    if (errFp) { dup2(fileno(errFp), 1); dup2(fileno(errFp), 2); }
-                }
                 Boolean success = pJobExecute(job, &diags, &mainSrc);
-                if (errFp) {
-                    fflush(stdout); fflush(stderr);
-                    dup2(savedOut, 1); dup2(savedErr, 2);
-                    close(savedOut); close(savedErr);
-                    fclose(errFp);
-                    NSString *cap = [NSString stringWithContentsOfFile:errFile encoding:NSUTF8StringEncoding error:nil];
-                    if (cap.length > 3000) cap = [cap substringToIndex:3000];
-                    line(std::string(tag) + " stderr：" + (cap ? std::string(cap.UTF8String) : std::string("(空)")));
-                }
                 CFAbsoluteTime dt = CFAbsoluteTimeGetCurrent() - t0;
                 line(std::string(tag) + " 執行結果：" + (success ? "成功" : "失敗"));
                 { char b[64]; snprintf(b, sizeof(b), "%s 耗時 %.0f ms", tag, dt * 1000.0); line(b); }
