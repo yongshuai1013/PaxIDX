@@ -613,6 +613,110 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             } else {
                 line("產物 testapp 不存在");
             }
+            // ---- G：產出代碼真執行——C 編成 dylib、dlopen 後呼叫驗返回值 ----
+            // 兩條線（自家／Nyxian）都從未驗過「產出的代碼能在裝置上跑」，
+            // 這段補上：編譯（B 同款）→連結 dylib（lld 加 -adhoc_codesign）
+            // →dlopen→dlsym→呼叫，返回值對上 42 才算數。
+            {
+                nyxMark("G start");
+                NSString *gsrc = [dir stringByAppendingPathComponent:@"probe_g.c"];
+                NSString *gobj = [dir stringByAppendingPathComponent:@"probe_g.o"];
+                NSString *glib = [dir stringByAppendingPathComponent:@"libprobe_g.dylib"];
+                [@"int paxidx_g_answer(void) { return 42; }\n" writeToFile:gsrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                runJob(cArgs(gsrc, gobj), "G-C(編譯dylib源)");
+                if ([fm fileExistsAtPath:gobj]) {
+                    runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                        @"-syslibroot", sdk, @"-dylib", @"-adhoc_codesign", @"-o", glib, gobj, @"-lSystem"], "G-L(連結dylib)");
+                } else {
+                    line("G：probe_g.o 不存在，跳過連結");
+                }
+                if ([fm fileExistsAtPath:glib]) {
+                    void *h = dlopen(glib.UTF8String, RTLD_NOW);
+                    if (!h) {
+                        line(std::string("G：dlopen 產出 dylib 失敗：") + (dlerror() ?: "(null)"));
+                    } else {
+                        typedef int (*AnswerFn)(void);
+                        AnswerFn fn = (AnswerFn)dlsym(h, "paxidx_g_answer");
+                        if (!fn) {
+                            line("G：dlsym 找不到 paxidx_g_answer");
+                        } else {
+                            int v = fn();
+                            line(std::string("G：產出函數已執行，返回值 ") + std::to_string(v) + (v == 42 ? "（正確）" : "（不符預期）"));
+                        }
+                    }
+                } else {
+                    line("G：libprobe_g.dylib 不存在");
+                }
+                nyxMark("G done");
+            }
+        }
+        // ---- S：Swift 探針（本案關鍵票） ----
+        // Nyxian 0.11.4 內嵌前端為 Swift 6.3.3；其 App 的正式路是
+        // SwiftDriver（type=3）＋專案 swiftFlags（-target／-sdk／
+        // -resource-dir <BSROOT>/swift／-module-cache-path／App 類加
+        // -parse-as-library，照 NXCodeTemplate 預設）。本裝置沒有
+        // BSROOT，先以既有 SDK 的 usr/lib/swift（介面集）當 resource-dir
+        // 試：S1 走 driver、S2 直打前端（type=2）。源碼刻意 import
+        // Foundation 並用到 Data——自家線從未編成過這一级別的 Swift。
+        {
+            nyxMark("S start");
+            NSString *ssrc = [dir stringByAppendingPathComponent:@"probe.swift"];
+            NSString *sobj = [dir stringByAppendingPathComponent:@"probe_swift.o"];
+            NSString *scache = [dir stringByAppendingPathComponent:@"ModuleCache"];
+            [fm createDirectoryAtPath:scache withIntermediateDirectories:YES attributes:nil error:nil];
+            [@"import Foundation\npublic func paxidxSwiftProbe() -> Int {\n    let parts = [\"nyx\", \"swift\"].joined(separator: \"-\")\n    let data = Data(parts.utf8)\n    return data.count + parts.count\n}\n"
+                writeToFile:ssrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            NSString *swiftRes = [sdk stringByAppendingPathComponent:@"usr/lib/swift"];
+            {
+                NSArray *mods = [fm contentsOfDirectoryAtPath:[swiftRes stringByAppendingPathComponent:@"iphoneos"] error:nil];
+                NSMutableArray *head = [NSMutableArray array];
+                for (NSUInteger k = 0; k < (mods ? mods.count : 0) && k < 12; k++) [head addObject:mods[k]];
+                line("S：SDK usr/lib/swift/iphoneos 內容（前 12）：" + std::string([[head componentsJoinedByString:@", "] UTF8String] ?: ""));
+            }
+            auto runJobT = [&](uint8_t type, NSArray *fullArgs, const char *tag) {
+                CCJobRef2 job = pJobCreate(nyxZeroAllocator(), type, (__bridge CFArrayRef)fullArgs);
+                if (!job) { line(std::string(tag) + "：CCJobCreate 回傳空"); return; }
+                CFArrayRef diags = NULL;
+                CFStringRef mainSrc = NULL;
+                CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+                Boolean success = pJobExecute(job, &diags, &mainSrc);
+                CFAbsoluteTime dt = CFAbsoluteTimeGetCurrent() - t0;
+                line(std::string(tag) + " 執行結果：" + (success ? "成功" : "失敗"));
+                { char b[64]; snprintf(b, sizeof(b), "%s 耗時 %.0f ms", tag, dt * 1000.0); line(b); }
+                line(std::string(tag) + (diags ? " diag 數：" + std::to_string((long)CFArrayGetCount(diags)) : " diag 陣列=NULL"));
+                if (diags && pDiagLevel && pDiagMessage) {
+                    CFIndex nd = CFArrayGetCount(diags);
+                    for (CFIndex d = 0; d < nd && d < 12; d++) {
+                        CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
+                        uint8_t lv = pDiagLevel(dg);
+                        CFStringRef msg = pDiagMessage(dg);
+                        std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
+                        line(std::string("  diag[") + kLevelNames[lv <= 5 ? lv : 5] + "] " + m);
+                    }
+                }
+                if (diags) CFRelease(diags);
+                if (mainSrc) CFRelease(mainSrc);
+                CFRelease(job);
+            };
+            runJobT(3, @[ssrc, @"-c", @"-o", sobj, @"-sdk", sdk, @"-target", @"arm64-apple-ios15.0",
+                @"-module-name", @"PaxProbe", @"-resource-dir", swiftRes,
+                @"-module-cache-path", scache, @"-parse-as-library", @"-aarch64-use-tbi"], "S1(SwiftDriver)");
+            if ([fm fileExistsAtPath:sobj]) {
+                unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
+                line("S1 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+            } else {
+                line("S1 無產物，接著試 S2 直打前端");
+                runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                    @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S2(Swift前端直打)");
+                if ([fm fileExistsAtPath:sobj]) {
+                    unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
+                    line("S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                } else {
+                    line("S2 亦無產物");
+                }
+            }
+            nyxMark("S done");
         }
         nyxMark("direct v2 done");
     }

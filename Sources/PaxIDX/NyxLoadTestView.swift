@@ -44,7 +44,7 @@ struct NyxLoadTestView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                Text("走 CoreCompiler 的 CCDriver C API（介面照 Nyxian 開源源碼）：把範例 C 檔（#include <stdio.h> 的 main）以 App 內已下載的 SDK 編成 test.o，回報診斷原文與產物是否生成。")
+                Text("走 CoreCompiler 直打 CCJob（介面照 Nyxian 開源源碼）：A–F 段驗 C／ObjC／連結；G 段把產出的 dylib 真 dlopen 呼叫驗返回值；S 段是關鍵票——用他們的 Swift 前端（6.3.3）編一個 import Foundation 的 Swift 檔，自家線從未編成過這一級別。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
