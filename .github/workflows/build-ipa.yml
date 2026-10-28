@@ -101,6 +101,9 @@ jobs:
             SWIFTDIR=$(find /tmp/sdkx -type d -path "*/usr/lib/swift" | head -1)
             echo "介面集來源：$SWIFTDIR"
             cp -R "$SWIFTDIR/." build/ipa/Payload/PaxIDX.app/NyxInterfaces/
+            # 這支 .a 開頭是 FAT Mach-O 魔數，TrollStore 安裝時 ldid 全包掃簽會
+            # 卡死在它身上（錯誤 175）；與探針無關，剔除
+            rm -f build/ipa/Payload/PaxIDX.app/NyxInterfaces/libswiftAuthenticationServicesSwiftSDKOverlay.a
             ls build/ipa/Payload/PaxIDX.app/NyxInterfaces/ | head -5
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
