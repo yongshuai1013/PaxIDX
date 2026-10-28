@@ -766,6 +766,12 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 // S3 證實：stdlib 走 -sdk 寫死的路徑載入，-I／-resource-dir 壓不過。
                 // 改建「影子 SDK」：目錄骨架用符號連結回原 SDK、只有 usr/lib/swift
                 // 換成介面影子集，-sdk 改指影子 SDK。
+                // 包內若有原始介面集（CI 內嵌的 NyxInterfaces，原始 SDK 未疊加版，
+                // 只有 .swiftinterface）優先用它當影子來源；裝置 SDK 那份被自家
+                // 6.2.4 疊加換成純二進制包、剝完沒東西可讀（S4 定案）。
+                NSString *pristine = [[NSBundle mainBundle] pathForResource:@"NyxInterfaces" ofType:nil];
+                NSString *swiftForSDK = pristine ?: shadow;
+                if (pristine) line("S：改用包內原始介面集 NyxInterfaces");
                 NSString *ssdk = [dir stringByAppendingPathComponent:@"shadowSDK"];
                 {
                     [fm removeItemAtPath:ssdk error:nil];
@@ -792,12 +798,12 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             withDestinationPath:[sdkLib stringByAppendingPathComponent:name] error:nil];
                     }
                     [fm createSymbolicLinkAtPath:[ssdkLib stringByAppendingPathComponent:@"swift"]
-                        withDestinationPath:shadow error:nil];
+                        withDestinationPath:swiftForSDK error:nil];
                     line("S：影子 SDK 已建（usr/lib/swift→介面影子集，其餘符號連結回原 SDK）");
                 }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", ssdk, @"-resource-dir", shadow, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S4(前端直打+影子SDK)");
+                    @"-sdk", ssdk, @"-resource-dir", swiftForSDK, @"-module-cache-path", scache,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S5(前端直打+影子SDK+原始介面集)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -805,9 +811,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S4/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S5/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S4/S2 亦無產物");
+                    line("S5/S2 亦無產物");
                 }
             }
             nyxMark("S done");
