@@ -763,9 +763,41 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 // 兩處都有）。S2a 補回普通輸入；S2b 再砍到最小集對照。
                 // 輸入只掛 -primary-file（S2a 證實加普通輸入會 duplicate）；
                 // 模塊改吃影子介面集：-I 影子在前、-resource-dir 亦指影子。
+                // S3 證實：stdlib 走 -sdk 寫死的路徑載入，-I／-resource-dir 壓不過。
+                // 改建「影子 SDK」：目錄骨架用符號連結回原 SDK、只有 usr/lib/swift
+                // 換成介面影子集，-sdk 改指影子 SDK。
+                NSString *ssdk = [dir stringByAppendingPathComponent:@"shadowSDK"];
+                {
+                    [fm removeItemAtPath:ssdk error:nil];
+                    [fm createDirectoryAtPath:ssdk withIntermediateDirectories:YES attributes:nil error:nil];
+                    for (NSString *name in [fm contentsOfDirectoryAtPath:sdk error:nil] ?: @[]) {
+                        if ([name isEqualToString:@"usr"]) continue;
+                        [fm createSymbolicLinkAtPath:[ssdk stringByAppendingPathComponent:name]
+                            withDestinationPath:[sdk stringByAppendingPathComponent:name] error:nil];
+                    }
+                    NSString *sdkUsr = [sdk stringByAppendingPathComponent:@"usr"];
+                    NSString *ssdkUsr = [ssdk stringByAppendingPathComponent:@"usr"];
+                    [fm createDirectoryAtPath:ssdkUsr withIntermediateDirectories:YES attributes:nil error:nil];
+                    for (NSString *name in [fm contentsOfDirectoryAtPath:sdkUsr error:nil] ?: @[]) {
+                        if ([name isEqualToString:@"lib"]) continue;
+                        [fm createSymbolicLinkAtPath:[ssdkUsr stringByAppendingPathComponent:name]
+                            withDestinationPath:[sdkUsr stringByAppendingPathComponent:name] error:nil];
+                    }
+                    NSString *sdkLib = [sdkUsr stringByAppendingPathComponent:@"lib"];
+                    NSString *ssdkLib = [ssdkUsr stringByAppendingPathComponent:@"lib"];
+                    [fm createDirectoryAtPath:ssdkLib withIntermediateDirectories:YES attributes:nil error:nil];
+                    for (NSString *name in [fm contentsOfDirectoryAtPath:sdkLib error:nil] ?: @[]) {
+                        if ([name isEqualToString:@"swift"]) continue;
+                        [fm createSymbolicLinkAtPath:[ssdkLib stringByAppendingPathComponent:name]
+                            withDestinationPath:[sdkLib stringByAppendingPathComponent:name] error:nil];
+                    }
+                    [fm createSymbolicLinkAtPath:[ssdkLib stringByAppendingPathComponent:@"swift"]
+                        withDestinationPath:shadow error:nil];
+                    line("S：影子 SDK 已建（usr/lib/swift→介面影子集，其餘符號連結回原 SDK）");
+                }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", sdk, @"-resource-dir", shadow, @"-module-cache-path", scache, @"-I", shadow,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S3(前端直打+影子介面集)");
+                    @"-sdk", ssdk, @"-resource-dir", shadow, @"-module-cache-path", scache,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S4(前端直打+影子SDK)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -773,9 +805,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S3/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S4/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S3/S2 亦無產物");
+                    line("S4/S2 亦無產物");
                 }
             }
             nyxMark("S done");
