@@ -668,10 +668,10 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 writeToFile:ssrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
             NSString *swiftRes = [sdk stringByAppendingPathComponent:@"usr/lib/swift"];
             {
-                NSArray *mods = [fm contentsOfDirectoryAtPath:[swiftRes stringByAppendingPathComponent:@"iphoneos"] error:nil];
+                NSArray *mods = [fm contentsOfDirectoryAtPath:swiftRes error:nil];
                 NSMutableArray *head = [NSMutableArray array];
                 for (NSUInteger k = 0; k < (mods ? mods.count : 0) && k < 12; k++) [head addObject:mods[k]];
-                line("S：SDK usr/lib/swift/iphoneos 內容（前 12）：" + std::string([[head componentsJoinedByString:@", "] UTF8String] ?: ""));
+                line("S：SDK usr/lib/swift 內容（前 12）：" + std::string([[head componentsJoinedByString:@", "] UTF8String] ?: ""));
             }
             auto runJobT = [&](uint8_t type, NSArray *fullArgs, const char *tag) {
                 CCJobRef2 job = pJobCreate(nyxZeroAllocator(), type, (__bridge CFArrayRef)fullArgs);
@@ -706,14 +706,21 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 line("S1 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
             } else {
                 line("S1 無產物，接著試 S2 直打前端");
-                runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                // S2 第一輪（136ms／零診斷／無產物）參數形狀有誤：輸入檔只掛在
+                // -primary-file 後面、沒有以普通輸入出現（真 swiftc 的前端命令行
+                // 兩處都有）。S2a 補回普通輸入；S2b 再砍到最小集對照。
+                runJobT(2, @[@"-frontend", @"-c", ssrc, @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                     @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S2(Swift前端直打)");
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S2a(前端直打+普通輸入)");
+                if (![fm fileExistsAtPath:sobj]) {
+                    runJobT(2, @[@"-frontend", @"-c", ssrc, @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                        @"-sdk", sdk, @"-o", sobj, @"-module-name", @"PaxProbe"], "S2b(前端直打最小集)");
+                }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S2a/b 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S2 亦無產物");
+                    line("S2a/b 亦無產物");
                 }
             }
             nyxMark("S done");
