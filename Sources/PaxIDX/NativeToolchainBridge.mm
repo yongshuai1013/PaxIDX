@@ -724,6 +724,35 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             runJobT(3, @[ssrc, @"-c", @"-o", sobj, @"-sdk", sdk, @"-target", @"arm64-apple-ios15.0",
                 @"-module-name", @"PaxProbe", @"-resource-dir", swiftRes,
                 @"-module-cache-path", scache, @"-parse-as-library", @"-aarch64-use-tbi"], "S1(SwiftDriver)");
+            // ---- S 影子介面集 ----
+            // #131 stderr 定案：裝置 SDK 的 Swift.swiftmodule 是自家 6.2.4 疊加的
+            // 二進制模塊，6.3.3 前端拒收（cannot be imported）；二進制在場會遮住
+            // 可跨版讀的 .swiftinterface。把 usr/lib/swift 複製到 tmp、剝掉所有
+            // 二進制 .swiftmodule「檔案」（同名目錄保留），-I 與 -resource-dir
+            // 改指影子集。
+            NSString *shadow = [dir stringByAppendingPathComponent:@"swiftshadow"];
+            {
+                [fm removeItemAtPath:shadow error:nil];
+                [fm createDirectoryAtPath:shadow withIntermediateDirectories:YES attributes:nil error:nil];
+                NSUInteger stripped = 0, copied = 0;
+                NSDirectoryEnumerator *en = [fm enumeratorAtPath:swiftRes];
+                NSString *rel;
+                while ((rel = [en nextObject])) {
+                    NSString *from = [swiftRes stringByAppendingPathComponent:rel];
+                    NSString *to = [shadow stringByAppendingPathComponent:rel];
+                    BOOL isDir = NO;
+                    [fm fileExistsAtPath:from isDirectory:&isDir];
+                    if (isDir) {
+                        [fm createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:nil];
+                    } else if ([rel.pathExtension isEqualToString:@"swiftmodule"]) {
+                        stripped++;
+                    } else {
+                        [fm copyItemAtPath:from toPath:to error:nil];
+                        copied++;
+                    }
+                }
+                line("S：影子介面集已建（複製 " + std::to_string(copied) + " 檔、剝二進制模塊 " + std::to_string(stripped) + " 檔）");
+            }
             if ([fm fileExistsAtPath:sobj]) {
                 unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
                 line("S1 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
@@ -732,18 +761,21 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 // S2 第一輪（136ms／零診斷／無產物）參數形狀有誤：輸入檔只掛在
                 // -primary-file 後面、沒有以普通輸入出現（真 swiftc 的前端命令行
                 // 兩處都有）。S2a 補回普通輸入；S2b 再砍到最小集對照。
-                runJobT(2, @[@"-frontend", @"-c", ssrc, @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S2a(前端直打+普通輸入)");
+                // 輸入只掛 -primary-file（S2a 證實加普通輸入會 duplicate）；
+                // 模塊改吃影子介面集：-I 影子在前、-resource-dir 亦指影子。
+                runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                    @"-sdk", sdk, @"-resource-dir", shadow, @"-module-cache-path", scache, @"-I", shadow,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S3(前端直打+影子介面集)");
                 if (![fm fileExistsAtPath:sobj]) {
-                    runJobT(2, @[@"-frontend", @"-c", ssrc, @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                        @"-sdk", sdk, @"-o", sobj, @"-module-name", @"PaxProbe"], "S2b(前端直打最小集)");
+                    runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                        @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
+                        @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S2(前端直打原形對照)");
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S2a/b 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S3/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S2a/b 亦無產物");
+                    line("S3/S2 亦無產物");
                 }
             }
             nyxMark("S done");
