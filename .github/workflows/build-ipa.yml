@@ -96,6 +96,9 @@ jobs:
             ls /tmp/paxsdk/res
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
             (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
+            echo "同版 PaxSDK.zip 發布到 release paxsdk-ios26（App 設定頁「下載 SDK」取用）"
+            gh release view paxsdk-ios26 --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create paxsdk-ios26 --repo yongshuai1013/PaxIDX --title "PaxSDK (iPhoneOS 26 + self-built res)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
+            gh release upload paxsdk-ios26 "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
