@@ -1024,6 +1024,22 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             line("G8[癸]：複製 lld 產出失敗");
                         }
                     }
+                    {
+                        NSString *gsrc2 = [dir stringByAppendingPathComponent:@"probe_g2.c"];
+                        NSString *gobj2 = [dir stringByAppendingPathComponent:@"probe_g2.o"];
+                        [@"__attribute__((used, section(\"__DATA,__paxpad\"))) static const char paxPad[3500000] = {1};\nint paxidx_g_answer(void) { return 42 + (int)(paxPad[0] - 1); }\n" writeToFile:gsrc2 atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                        runJob(cArgs(gsrc2, gobj2), "G10-C(編譯填充probe)");
+                        if ([fm fileExistsAtPath:gobj2]) {
+                            NSString *glibP = [dir stringByAppendingPathComponent:@"libprobe_g_pad.dylib"];
+                            runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                                @"-syslibroot", sdk, @"-dylib", @"-adhoc_codesign", @"-o", glibP, gobj2, @"-lSystem"], "G10-L(癸2·填充版)");
+                            NSString *donorP2 = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/Frameworks/lib_CompilerSwiftSyntax.dylib"];
+                            std::string pdetail;
+                            bool pok = paxGraftSignMachO(glibP.UTF8String, donorP2.UTF8String, pdetail);
+                            line(std::string("G10[癸2 graft@填充probe]：") + pdetail);
+                            if (pok) tryLoad(glibP, "G10[癸2 graft填充自產]");
+                        }
+                    }
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
                     }
@@ -1083,12 +1099,14 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                                 [fm removeItemAtPath:g4 error:nil];
                                 if ([fm copyItemAtPath:smallest toPath:g4 error:nil]) {
                                     line(std::string("G9[壬]：最小 bundle dylib = ") + smallest.lastPathComponent.UTF8String + "（" + std::to_string(best) + "B）");
+                                    { std::string d; paxDumpSuperblob(smallest.UTF8String, "壬原簽", d); line(d); }
                                     std::string jdetail;
                                     bool jok = paxGraftSignMachO(g4.UTF8String, fwSyntax.UTF8String, jdetail);
                                     line(std::string("G9[壬 graft@小良品]：") + jdetail);
                                     if (jok) {
                                         void *jh = dlopen(g4.UTF8String, RTLD_NOW);
                                         line(std::string("G9[壬 graft小良品]：") + (jh ? "dlopen 成功" : std::string("dlopen 失敗：") + (dlerror() ?: "(null)")));
+                                        { std::string d; paxDumpSuperblob(g4.UTF8String, "壬產出", d); line(d); }
                                     }
                                 }
                             }
@@ -1175,6 +1193,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             {
                 NSString *srcP = [bundleDir stringByAppendingPathComponent:@"probe_ldid.dylib"];
                 NSString *dstP = [dir stringByAppendingPathComponent:@"probe_ldid.dylib"];
+                { std::string d; paxDumpSuperblob(srcP.UTF8String, "戊原簽（裝機版）", d); line(d); }
                 [fm removeItemAtPath:dstP error:nil];
                 if ([fm copyItemAtPath:srcP toPath:dstP error:nil]) {
                     void *h = dlopen(dstP.UTF8String, RTLD_NOW);
