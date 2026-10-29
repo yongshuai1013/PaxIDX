@@ -95,15 +95,14 @@ jobs:
             echo "nyx_test：組 PaxSDK.zip（完整原始 SDK＋BSROOT res，他們的打包法；S10 用）"
             unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Shared/swift.zip" -d /tmp/nyx
             unzip -o -q /tmp/nyx/Payload/Nyxian.app/Shared/swift.zip "swift/shims/*" "swift/clang/*" "swift/module.modulemap" -d /tmp/nyxres
-            curl -sSL -o /tmp/darwin-sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
-            unzip -o -q /tmp/darwin-sdk.zip -d /tmp/paxsdkfull
-            unzip -l /tmp/darwin-sdk.zip | head -5
-            SDKROOT2=$(find /tmp/paxsdkfull -maxdepth 3 -type d -name "iPhoneOS*.sdk" | head -1)
-            echo "原始 SDK 來源：$SDKROOT2"
+            # SDK 換 Xcode 26 原生 iphoneos SDK（CI 機 Xcode 26.6 的 26.5 世代，
+            # 與自編 6.4 前端同世代）；部署目標 15 由探針 -target 指定。
+            SDKROOT2=$(xcrun --sdk iphoneos --show-sdk-path)
+            echo "Xcode SDK 來源：$SDKROOT2"
+            ls "$SDKROOT2" | head -5
             rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
             mkdir -p /tmp/paxsdk/iPhoneOS.sdk
             cp -R "$SDKROOT2/." /tmp/paxsdk/iPhoneOS.sdk/
-            rm -f /tmp/paxsdk/iPhoneOS.sdk/usr/lib/swift/libswiftAuthenticationServicesSwiftSDKOverlay.a
             cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap /tmp/paxsdk/res/
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
             (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
