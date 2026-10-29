@@ -78,13 +78,12 @@ jobs:
           # dylib 塞進 Frameworks，跟 App 一起簽名（iOS 才允許 dlopen）
           mkdir -p build/ipa/Payload/PaxIDX.app/Frameworks
           cp Vendor/NativeToolchain/libPaxIDXNativeToolchain.dylib build/ipa/Payload/PaxIDX.app/Frameworks/
-          if [ "${{ inputs.nyx_test }}" = "true" ]; then
-            echo "nyx_test：下載自編 CoreCompiler（release corecompiler-6.4-ios15，minos 15 原生、免改戳記）"
+            echo "整合正式路：內嵌自編 CoreCompiler（release corecompiler-6.4-ios15，minos 15 原生）"
             gh release download corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX --pattern "CoreCompiler.framework.zip" --dir /tmp/ccfw
             unzip -o -q /tmp/ccfw/CoreCompiler.framework.zip -d /tmp/ccfw/x
             ls -la /tmp/ccfw/x/CoreCompiler.framework/
             cp -R /tmp/ccfw/x/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
-            echo "nyx_test：組 PaxSDK.zip（完整原始 SDK＋BSROOT res，他們的打包法；S10 用）"
+            echo "組 PaxSDK.zip（完整 SDK＋自編 res）"
             # SDK 換 Xcode 26 原生 iphoneos SDK（CI 機 Xcode 26.6 的 26.5 世代，
             # 與自編 6.4 前端同世代）；部署目標 15 由探針 -target 指定。
             if [ "${{ inputs.sdk27 }}" = "true" ]; then
@@ -116,7 +115,6 @@ jobs:
             gh release view "$RELTAG" --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create "$RELTAG" --repo yongshuai1013/PaxIDX --title "PaxSDK ($RELTAG)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
             gh release upload "$RELTAG" "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
-          fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
 
       - name: 上傳未簽名 IPA

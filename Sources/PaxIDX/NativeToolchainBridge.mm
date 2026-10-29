@@ -361,6 +361,26 @@ typedef CFArrayRef (*CCJobGetBaseArgumentsFn)(CCJobRef2);
 typedef CFArrayRef (*CCJobGetInputFileURLsFn)(CCJobRef2);
 typedef uint8_t (*CCJobGetTypeFn)(CCJobRef2);
 
+// 打包 SDK 解析：Documents/PaxSDK/sdk/iphoneos-<主版>.sdk 取最高版，
+// 找不到才退回舊佈局 Documents/PaxSDK/iPhoneOS.sdk。
+static NSString *nyxPackagedSDKPath(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *store = [[docs stringByAppendingPathComponent:@"PaxSDK"] stringByAppendingPathComponent:@"sdk"];
+    NSString *best = nil;
+    int bestMajor = -1;
+    for (NSString *name in [fm contentsOfDirectoryAtPath:store error:nil] ?: @[]) {
+        if (![name hasPrefix:@"iphoneos-"] || ![name hasSuffix:@".sdk"]) continue;
+        NSString *num = [[name stringByReplacingOccurrencesOfString:@"iphoneos-" withString:@""]
+            stringByReplacingOccurrencesOfString:@".sdk" withString:@""];
+        int v = num.intValue;
+        if (v > bestMajor) { bestMajor = v; best = [store stringByAppendingPathComponent:name]; }
+    }
+    if (best) return best;
+    NSString *legacy = [[docs stringByAppendingPathComponent:@"PaxSDK"] stringByAppendingPathComponent:@"iPhoneOS.sdk"];
+    return [fm fileExistsAtPath:legacy] ? legacy : nil;
+}
+
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     static std::atomic<bool> s_running{false};
     if (s_running.exchange(true)) {
@@ -424,8 +444,8 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     NSString *sdk = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/SDK/iPhoneOS.sdk"];
     if (![fm fileExistsAtPath:sdk]) {
         // 打包 SDK 已解壓在 Documents/PaxSDK 就直接用它（新鏈不依賴舊下載路徑）
-        NSString *bundled = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/PaxSDK/iPhoneOS.sdk"];
-        if ([fm fileExistsAtPath:bundled]) {
+        NSString *bundled = nyxPackagedSDKPath();
+        if (bundled && [fm fileExistsAtPath:bundled]) {
             sdk = bundled;
             line("S：舊路徑 SDK 不在，改用打包 SDK（Documents/PaxSDK）");
         } else {
@@ -884,7 +904,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 // 就位就直指（不走影子／拼裝），缺位才退回 S9 影子配方。
                 NSString *docsDir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
                 NSString *paxSDKRoot = [docsDir stringByAppendingPathComponent:@"PaxSDK"];
-                NSString *bundledSDK = [paxSDKRoot stringByAppendingPathComponent:@"iPhoneOS.sdk"];
+                NSString *bundledSDK = nyxPackagedSDKPath() ?: [paxSDKRoot stringByAppendingPathComponent:@"iPhoneOS.sdk"];
                 NSString *bundledRes = [paxSDKRoot stringByAppendingPathComponent:@"res"];
                 BOOL bundledOK = ([fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface"]]
                                || [fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64e-apple-ios.swiftinterface"]])
@@ -927,4 +947,81 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     nyxMark("finished");
     copyDiag(report.c_str(), buffer, capacity);
     return ok ? 0 : 1;
+}
+
+// ---- 整合正式路：通用 CCJob 執行（專案編譯用）----
+static void *paxCCHandle = NULL;
+static CCJobCreateFn paxCCJobCreate = NULL;
+static CCJobExecuteJobFn paxCCJobExecute = NULL;
+static CCDiagnosticGetLevelFn paxCCDiagLevel = NULL;
+static CCDiagnosticGetMessageFn paxCCDiagMessage = NULL;
+static int paxCCState = 0; // 0 未試、1 可用、2 未內嵌、3 載入失敗
+
+static int paxCCEnsureLoaded(void) {
+    if (paxCCState != 0) return paxCCState;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *fwPath = [[[NSBundle mainBundle] bundlePath]
+        stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/CoreCompiler"];
+    if (![fm fileExistsAtPath:fwPath]) { paxCCState = 2; return paxCCState; }
+    void *h = dlopen(fwPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) { paxCCState = 3; return paxCCState; }
+    paxCCHandle = h;
+    paxCCJobCreate = (CCJobCreateFn)dlsym(h, "CCJobCreate");
+    paxCCJobExecute = (CCJobExecuteJobFn)dlsym(h, "CCJobExecuteJob");
+    paxCCDiagLevel = (CCDiagnosticGetLevelFn)dlsym(h, "CCDiagnosticGetLevel");
+    paxCCDiagMessage = (CCDiagnosticGetMessageFn)dlsym(h, "CCDiagnosticGetMessage");
+    paxCCState = (paxCCJobCreate && paxCCJobExecute) ? 1 : 3;
+    return paxCCState;
+}
+
+extern "C" int paxidx_cc_job(int type, int argc, const char * const *argv,
+                             char *report, size_t capacity) {
+    static const char *kCCLevelNames[] = {"note", "remark", "warning", "error", "fatal", "unknown"};
+    int st = paxCCEnsureLoaded();
+    if (st == 2) { copyDiag("未內嵌 CoreCompiler.framework", report, capacity); return 2; }
+    if (st != 1) { copyDiag("CoreCompiler 載入失敗", report, capacity); return 1; }
+    NSMutableArray *args = [NSMutableArray arrayWithCapacity:(NSUInteger)argc];
+    for (int i = 0; i < argc; i++) [args addObject:[NSString stringWithUTF8String:argv[i]]];
+    CCJobRef2 job = paxCCJobCreate(nyxZeroAllocator(), (uint8_t)type, (__bridge CFArrayRef)args);
+    if (!job) { copyDiag("CCJobCreate 回傳空", report, capacity); return 1; }
+    // 前端／連結器的 invocation 級錯誤走 stderr、不進診斷陣列：執行期間把
+    // fd 1/2 轉到暫存檔，結束後讀回（照實測頁 runJobT 的做法）
+    NSString *errFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"paxcc_stderr.txt"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:errFile error:nil];
+    fflush(stdout); fflush(stderr);
+    int savedOut = dup(1), savedErr = dup(2);
+    FILE *errFp = fopen(errFile.UTF8String, "w");
+    if (errFp) { dup2(fileno(errFp), 1); dup2(fileno(errFp), 2); }
+    CFArrayRef diags = NULL;
+    CFStringRef mainSrc = NULL;
+    Boolean success = paxCCJobExecute(job, &diags, &mainSrc);
+    if (errFp) {
+        fflush(stdout); fflush(stderr);
+        dup2(savedOut, 1); dup2(savedErr, 2);
+        fclose(errFp);
+    }
+    if (savedOut >= 0) close(savedOut);
+    if (savedErr >= 0) close(savedErr);
+    std::string out;
+    if (diags && paxCCDiagLevel && paxCCDiagMessage) {
+        CFIndex nd = CFArrayGetCount(diags);
+        for (CFIndex d = 0; d < nd; d++) {
+            CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
+            uint8_t lv = paxCCDiagLevel(dg);
+            CFStringRef msg = paxCCDiagMessage(dg);
+            std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
+            out += std::string("diag[") + kCCLevelNames[lv <= 5 ? lv : 5] + "] " + m + "\n";
+        }
+    }
+    NSString *cap = [NSString stringWithContentsOfFile:errFile encoding:NSUTF8StringEncoding error:nil];
+    if (cap.length > 0) {
+        if (cap.length > 6000) cap = [cap substringToIndex:6000];
+        out += cap.UTF8String;
+    }
+    if (diags) CFRelease(diags);
+    if (mainSrc) CFRelease(mainSrc);
+    CFRelease(job);
+    copyDiag(out.c_str(), report, capacity);
+    return success ? 0 : 1;
 }

@@ -1,137 +1,165 @@
 import SwiftUI
-import Zip
 
-/// 下載 SDK 頁（2026-10-29 永帥交代：原「下載管理」四件套改制）：
-/// 編譯用的 SDK 只剩這一件——PaxSDK.zip（iPhoneOS 26 世代 SDK＋自編
-/// Swift 6.4 編譯器 res，介面版本戳已在打包時改成 6.4）從 GitHub
-/// release `paxsdk-ios26` 下載，解壓到 Documents/PaxSDK，試編與之後
-/// 的編譯流程直指該處。不再有模塊疊加／Clang 頭／sysroot 等分件下載。
+/// 下載 SDK（多版本管理）：SDK 按版本並存在 Documents/PaxSDK/sdk/
+/// （iphoneos-26.sdk／iphoneos-27.sdk），編譯時在專案頁選用哪一版。
+/// res（編譯器資源）跨版本共用一份。
 struct SDKDownloadView: View {
-    @StateObject private var downloader = SDKDownloader()
-    @State private var installed = SDKDownloadView.sdkReady()
-
-    static var destRoot: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PaxSDK")
+    private struct ReleaseInfo {
+        let major: Int
+        let label: String
+        let url: String
     }
 
-    static func sdkReady() -> Bool {
-        let fm = FileManager.default
-        let sdk = destRoot.appendingPathComponent("iPhoneOS.sdk")
-        let e = sdk.appendingPathComponent("usr/lib/swift/Swift.swiftmodule/arm64e-apple-ios.swiftinterface")
-        let a = sdk.appendingPathComponent("usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface")
-        return (fm.fileExists(atPath: e.path) || fm.fileExists(atPath: a.path))
-            && fm.fileExists(atPath: destRoot.appendingPathComponent("res/module.modulemap").path)
-    }
+    private let releases = [
+        ReleaseInfo(major: 27, label: "iOS 27.1 SDK",
+                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios27/PaxSDK.zip"),
+        ReleaseInfo(major: 26, label: "iOS 26.5 SDK",
+                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios26/PaxSDK.zip"),
+    ]
+
+    @State private var installed: [PaxSDKStore.InstalledSDK] = []
+    @State private var busyMajor: Int? = nil
+    @State private var progress: Double = 0
+    @State private var statusText = ""
+    @StateObject private var downloader = SDKZipDownloader()
 
     var body: some View {
         List {
-            Section(header: Text("編譯用 SDK")) {
-                HStack {
-                    Text("狀態")
-                    Spacer()
-                    Text(installed ? "已就位" : "未下載")
-                        .foregroundColor(installed ? .green : .orange)
-                }
-                if downloader.busy {
-                    HStack {
-                        ProgressView(value: downloader.progress)
-                        Text("\(Int(downloader.progress * 100))%")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(width: 45, alignment: .trailing)
+            Section(header: Text("SDK 版本")) {
+                ForEach(releases, id: \.major) { rel in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(rel.label)
+                            Spacer()
+                            if let sdk = installed.first(where: { $0.major == rel.major }) {
+                                Text("已安裝")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Button("刪除") {
+                                    PaxSDKStore.remove(sdk)
+                                    refresh()
+                                }
+                                .font(.caption)
+                                .foregroundColor(.red)
+                            } else if busyMajor == rel.major {
+                                Text("處理中…")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Button("下載") { startDownload(rel) }
+                                    .font(.caption)
+                            }
+                        }
+                        if busyMajor == rel.major {
+                            ProgressView(value: progress)
+                        }
                     }
+                    .padding(.vertical, 2)
                 }
-                if !downloader.message.isEmpty {
-                    Text(downloader.message)
+            }
+            if !statusText.isEmpty {
+                Section(header: Text("狀態")) {
+                    Text(statusText)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                if !downloader.busy {
-                    Button(installed ? "重新下載 SDK" : "下載 SDK") {
-                        downloader.start()
-                    }
-                }
-                if installed && !downloader.busy {
-                    Button("刪除 SDK", role: .destructive) {
-                        try? FileManager.default.removeItem(at: Self.destRoot)
-                        installed = Self.sdkReady()
-                    }
-                }
-                Text("iPhoneOS 26 世代 SDK＋自編 Swift 6.4 編譯器資源（res）。下載後解壓到 Documents/PaxSDK，編譯時直接使用。")
+            }
+            Section {
+                Text("編譯時用哪一版，在專案的編譯頁上方切換。res（編譯器內建資源）各版共用一份，裝好第一份 SDK 時自動備齊。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
         .navigationTitle("下載 SDK")
-        .onAppear { installed = Self.sdkReady() }
-        .onChange(of: downloader.doneTick) { _ in installed = Self.sdkReady() }
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        installed = PaxSDKStore.installedSDKs()
+    }
+
+    private func startDownload(_ rel: ReleaseInfo) {
+        guard let url = URL(string: rel.url) else { return }
+        busyMajor = rel.major
+        progress = 0
+        statusText = "下載中…"
+        downloader.start(url: url,
+            onProgress: { p in progress = p },
+            onDone: { file, errorText in
+                if let errorText = errorText {
+                    statusText = "下載失敗：\(errorText)"
+                    busyMajor = nil
+                    return
+                }
+                guard let file = file else {
+                    statusText = "下載失敗：沒有檔案"
+                    busyMajor = nil
+                    return
+                }
+                statusText = "解壓安裝中…"
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let sdk = try PaxSDKStore.install(zipAt: file)
+                        DispatchQueue.main.async {
+                            statusText = "已安裝 iOS \(sdk.version) SDK"
+                            busyMajor = nil
+                            refresh()
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            statusText = "安裝失敗：\(error.localizedDescription)"
+                            busyMajor = nil
+                        }
+                    }
+                }
+            })
     }
 }
 
-final class SDKDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
-    @Published var progress = 0.0
-    @Published var busy = false
-    @Published var message = ""
-    @Published var doneTick = 0
+/// PaxSDK.zip 下載器（帶進度）
+final class SDKZipDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
+    private var session: URLSession?
+    private var onProgress: ((Double) -> Void)?
+    private var onDone: ((URL?, String?) -> Void)?
 
-    func start() {
-        busy = true
-        message = "下載中…"
-        progress = 0
-        let url = URL(string: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios26/PaxSDK.zip")!
-        let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-        session.downloadTask(with: url).resume()
+    func start(url: URL, onProgress: @escaping (Double) -> Void,
+               onDone: @escaping (URL?, String?) -> Void) {
+        self.onProgress = onProgress
+        self.onDone = onDone
+        let s = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+        session = s
+        s.downloadTask(with: url).resume()
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        DispatchQueue.main.async {
-            if totalBytesExpectedToWrite > 0 {
-                self.progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            }
+        if totalBytesExpectedToWrite > 0 {
+            onProgress?(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
         }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
-        let fm = FileManager.default
-        let dest = SDKDownloadView.destRoot
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PaxSDK-\(UUID().uuidString).zip")
         do {
-            DispatchQueue.main.async { self.message = "下載完成，解壓中…" }
-            try? fm.removeItem(at: dest)
-            try fm.createDirectory(at: dest, withIntermediateDirectories: true)
-            let staged = dest.appendingPathComponent("PaxSDK.zip")
-            try? fm.removeItem(at: staged)
-            try fm.moveItem(at: location, to: staged)
-            try Zip.unzipFile(staged, destination: dest, overwrite: true, password: nil)
-            try? fm.removeItem(at: staged)
-            let ok = SDKDownloadView.sdkReady()
-            DispatchQueue.main.async {
-                self.message = ok ? "SDK 已就位" : "解壓完成但驗證未過，請回報"
-                self.busy = false
-                self.doneTick += 1
-            }
+            try FileManager.default.copyItem(at: location, to: dest)
+            onDone?(dest, nil)
         } catch {
-            DispatchQueue.main.async {
-                self.message = "失敗：\(error.localizedDescription)"
-                self.busy = false
-                self.doneTick += 1
-            }
+            onDone?(nil, error.localizedDescription)
         }
-        session.finishTasksAndInvalidate()
+        session.invalidateAndCancel()
+        self.session = nil
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
         if let error = error {
-            DispatchQueue.main.async {
-                self.message = "下載失敗：\(error.localizedDescription)"
-                self.busy = false
-                self.doneTick += 1
-            }
+            onDone?(nil, error.localizedDescription)
+            session.invalidateAndCancel()
+            self.session = nil
         }
-        session.finishTasksAndInvalidate()
     }
 }

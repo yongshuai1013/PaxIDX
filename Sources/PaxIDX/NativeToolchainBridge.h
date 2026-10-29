@@ -30,6 +30,12 @@ int paxidx_clang_compile(int argc, const char * const *argv,
 int paxidx_ld_link(int argc, const char * const *argv,
                    char *diagnostics, size_t diagnostics_capacity);
 
+/// 通用 CCJob 執行（整合正式編譯路）：type 0=Clang 前端、2=Swift 前端、
+/// 4=連結器；argv 是完整參數（不含程式名），report 收診斷與 stderr 摘要；
+/// 0=成功、1=失敗、2=未內嵌
+int paxidx_cc_job(int type, int argc, const char * const *argv,
+                  char *report, size_t capacity);
+
 /// Nyxian CoreCompiler 載入實測（實驗）：dlopen App 內嵌的
 /// CoreCompiler.framework 並讀其版本符號，報告寫入 buffer；
 /// 0=載入成功、1=載入失敗、2=未內嵌

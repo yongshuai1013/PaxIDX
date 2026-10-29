@@ -26,7 +26,7 @@ struct NyxLoadTestView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                Text("只做 dlopen＋讀版本符號，不呼叫編譯功能。成功＝改戳記後 dyld 接受、且全體初始化在 iOS 15 上跑完；失敗會顯示 dyld 的原文錯誤。")
+                Text("只做 dlopen＋讀版本符號，不呼叫編譯功能。成功＝dyld 接受自編框架、且全體初始化在 iOS 15 上跑完；失敗會顯示 dyld 的原文錯誤。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -45,7 +45,7 @@ struct NyxLoadTestView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                Text("走 CoreCompiler 直打 CCJob（介面照 Nyxian 開源源碼）：A–F 段驗 C／ObjC／連結；G 段把產出的 dylib 真 dlopen 呼叫驗返回值；S 段是關鍵票——用他們的 Swift 前端（6.3.3）編一個 import Foundation 的 Swift 檔，自家線從未編成過這一級別。")
+                Text("走 CoreCompiler 直打 CCJob（介面照 Nyxian 開源源碼）：A–F 段驗 C／ObjC／連結；G 段把產出的 dylib 真 dlopen 呼叫驗返回值；S 段是關鍵票——用自編 Swift 前端（6.4）編一個 import Foundation 的 Swift 檔，自家線從未編成過這一級別。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -94,15 +94,7 @@ struct NyxLoadTestView: View {
     /// 他們的打包法：App 自帶 PaxSDK.zip（完整乾淨 SDK＋BSROOT res），
     /// 首次試編前解壓到 Documents/PaxSDK 固定根，橋接 S10 直指該根。
     private static func bootstrapPaxSDK() {
-        guard let zip = Bundle.main.url(forResource: "PaxSDK", withExtension: "zip") else { return }
-        let fm = FileManager.default
-        let dest = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PaxSDK")
-        let sentinel = dest.appendingPathComponent(
-            "iPhoneOS.sdk/usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface")
-        if fm.fileExists(atPath: sentinel.path) { return }
-        try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
-        try? Zip.unzipFile(zip, destination: dest, overwrite: true, password: nil)
+        PaxSDKStore.bootstrapEmbeddedIfNeeded()
     }
 
     private func runTest() {

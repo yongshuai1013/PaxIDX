@@ -27,6 +27,11 @@ struct BuildView: View {
     @State private var newFileName = ""
     @State private var newFileType = "c"
 
+    // 已安裝 SDK 與選版（編譯頁上方切換，持久化到 UserDefaults）
+    @State private var installedSDKs: [PaxSDKStore.InstalledSDK] = []
+    @State private var selectedSDKFolder: String =
+        UserDefaults.standard.string(forKey: "paxidx.selectedSDKFolder") ?? ""
+
     // 文件列表：源文件＋構建產物，動態讀取
     @State private var sourceFiles: [String] = []
     @State private var buildFiles: [String] = []
@@ -41,9 +46,32 @@ struct BuildView: View {
         buildFiles = all.filter { $0 != "Sources" }
     }
 
+    private func refreshSDKList() {
+        installedSDKs = PaxSDKStore.installedSDKs()
+        if !installedSDKs.contains(where: { $0.folderName == selectedSDKFolder }) {
+            selectedSDKFolder = installedSDKs.first?.folderName ?? ""
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             List {
+                Section(header: Text("編譯 SDK")) {
+                    if installedSDKs.isEmpty {
+                        Text("尚未安裝 SDK（首次編譯時會自動解壓內嵌的那份，也可到設定→「下載 SDK」管理版本）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("SDK 版本", selection: $selectedSDKFolder) {
+                            ForEach(installedSDKs) { sdk in
+                                Text("iOS \(sdk.version)").tag(sdk.folderName)
+                            }
+                        }
+                        .onChange(of: selectedSDKFolder) { v in
+                            UserDefaults.standard.set(v, forKey: "paxidx.selectedSDKFolder")
+                        }
+                    }
+                }
                 Section(header: Text("源文件")) {
                     ForEach(sourceFiles, id: \.self) { file in
                         NavigationLink(destination: FileEditorView(project: project, filename: file, onSave: { reloadFiles() })) {
@@ -68,7 +96,7 @@ struct BuildView: View {
                 }
             }
             .listStyle(.plain)
-            .onAppear(perform: reloadFiles)
+                        .onAppear { reloadFiles(); refreshSDKList() }
 
             // 底部編譯按鈕
             HStack {
@@ -196,35 +224,36 @@ struct BuildView: View {
     private func startBuild() {
         buildLog = ""
         isBuilding = true
+        var chosenSDK: PaxSDKStore.InstalledSDK? = nil
 
         let stages = [
-            BuildStage(name: "檢查工具鏈") { log in
-                // dylib 已下載就可用（dlopen 載入）
-                if paxidx_toolchain_available() == 1 {
-                    log("工具鏈可用")
-                    return nil
+            BuildStage(name: "檢查編譯器") { log in
+                if !CoreCompilerService.frameworkEmbedded {
+                    return "此版本未內嵌 CoreCompiler 編譯器"
                 }
-                // 載入失敗：顯示真實原因（dlopen 錯誤）
-                var errBuf = [CChar](repeating: 0, count: 1024)
-                paxidx_toolchain_error(&errBuf, errBuf.count)
-                let reason = String(cString: errBuf)
-                if reason.isEmpty {
-                    return "工具鏈未下載（到設定頁下載工具鏈）"
+                PaxSDKStore.bootstrapEmbeddedIfNeeded()
+                let all = PaxSDKStore.installedSDKs()
+                chosenSDK = all.first { $0.folderName == selectedSDKFolder } ?? all.first
+                guard let sdk = chosenSDK else {
+                    return "未安裝任何 SDK（到設定→「下載 SDK」下載一份）"
                 }
-                return "工具鏈載入失敗：\(reason)"
+                let res = PaxSDKStore.resDir
+                if !FileManager.default.fileExists(atPath: res.appendingPathComponent("module.modulemap").path) {
+                    return "缺編譯器資源 res（重新下載任一 SDK 即可補上）"
+                }
+                log("編譯器：自編 CoreCompiler（Swift 6.4）")
+                log("SDK：iOS \(sdk.version)（\(sdk.folderName)）")
+                return nil
             },
             BuildStage(name: "編譯") { log in
-                // 真實編譯：調用內嵌的 Clang + LLD
+                guard let sdk = chosenSDK else { return "未選定 SDK" }
                 let fm = FileManager.default
+                let res = PaxSDKStore.resDir
                 let sourcesDir = ProjectFiles.sourcesDirectory(for: project.name)
                 let buildDir = ProjectFiles.directory(for: project.name)
                     .appendingPathComponent("build", isDirectory: true)
-
-                // 清理舊的 build 目錄
                 try? fm.removeItem(at: buildDir)
                 try? fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
-
-                // 找出所有源文件
                 guard let files = try? fm.contentsOfDirectory(atPath: sourcesDir.path) else {
                     return "找不到源碼目錄"
                 }
@@ -232,135 +261,50 @@ struct BuildView: View {
                     $0.hasSuffix(".c") || $0.hasSuffix(".m") ||
                     $0.hasSuffix(".cpp") || $0.hasSuffix(".mm") ||
                     $0.hasSuffix(".cc") || $0.hasSuffix(".swift")
-                }
-                if sources.isEmpty {
-                    return "沒有找到源文件"
-                }
+                }.sorted()
+                if sources.isEmpty { return "沒有找到源文件" }
                 log("找到 \(sources.count) 個源文件")
-
-                // SDK 路徑：從已下載的 Darwin SDK 獲取
-                guard let sdkURL = SDKManager.shared.sdkPath else {
-                    return "未找到 iOS SDK，請先在設定裡下載 SDK"
-                }
-                let sdk = sdkURL.path
-                // 檢查 SDK 是否完整（stdio.h 在不在）
-                let stdioPath = (sdk as NSString).appendingPathComponent("usr/include/stdio.h")
-                if !FileManager.default.fileExists(atPath: stdioPath) {
-                    // 看看 usr/include 下有什麼，幫助診斷
-                    let incDir = (sdk as NSString).appendingPathComponent("usr/include")
-                    let contents = (try? FileManager.default.contentsOfDirectory(atPath: incDir)) ?? []
-                    log("SDK 不完整：缺 usr/include/stdio.h")
-                    log("usr/include 下有 \(contents.count) 個文件")
-                    if contents.isEmpty {
-                        return "SDK 的 usr/include 是空的，請到設定頁刪除 SDK 後重新下載"
-                    }
-                    return "SDK 缺 stdio.h，請到設定頁刪除 SDK 後重新下載"
-                }
-
-                var objects: [String] = []
+                let swiftFiles = sources.filter { $0.hasSuffix(".swift") }
+                    .map { sourcesDir.appendingPathComponent($0) }
+                let moduleName = project.name.map { ch -> String in
+                    (ch == "_" || ch.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) })
+                        ? String(ch) : "_"
+                }.joined()
+                let cacheDir = buildDir.appendingPathComponent("ModuleCache", isDirectory: true)
+                try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+                var objects: [URL] = []
+                var hasObjC = false, hasSwift = false, hasCpp = false
                 for src in sources {
-                    let srcPath = sourcesDir.appendingPathComponent(src).path
-                    let objName = (src as NSString).deletingPathExtension + ".o"
-                    let objPath = buildDir.appendingPathComponent(objName).path
-                    objects.append(objPath)
-
+                    let srcURL = sourcesDir.appendingPathComponent(src)
+                    let objURL = buildDir.appendingPathComponent((src as NSString).deletingPathExtension + ".o")
+                    objects.append(objURL)
                     log("編譯 \(src)…")
-                    let isSwift = src.hasSuffix(".swift")
-                    let (rc, diag): (Int32, String)
-                    if isSwift {
-                        // Swift 走 dylib 的前端封裝（paxidx_swift_compile）；
-                        // 參數集對齊封裝的解析：-target/-sdk/-module-cache-path/-o/<input.swift>
-                        if paxidx_swift_available() != 1 {
-                            return "Swift 工具鏈不可用（到設定頁下載 Swift 工具鏈）"
-                        }
-                        if !ToolchainManager.shared.isSwiftModulesOverlaid {
-                            return "Swift 標準庫模塊尚未疊加（到設定頁點「疊加 Swift 標準庫模塊」）"
-                        }
-                        let cacheDir = buildDir.appendingPathComponent("ModuleCache", isDirectory: true)
-                        try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-                        let args = [
-                            "swift",
-                            "-target", "arm64-apple-ios15.0",
-                            "-sdk", sdk,
-                            "-module-cache-path", cacheDir.path,
-                            "-o", objPath,
-                            srcPath,
-                        ]
-                        (rc, diag) = runNative(args, paxidx_swift_compile)
+                    let ext = (src as NSString).pathExtension.lowercased()
+                    let r: (rc: Int32, report: String)
+                    if ext == "swift" {
+                        hasSwift = true
+                        r = CoreCompilerService.compileSwift(source: srcURL, allSwift: swiftFiles,
+                                                             object: objURL, sdk: sdk.url, res: res,
+                                                             moduleName: moduleName, moduleCache: cacheDir)
                     } else {
-                        // 構造 clang 參數
-                        let args = [
-                            "clang",
-                            "-target", "arm64-apple-ios15.0",
-                            "-isysroot", sdk,
-                            "-c", srcPath,
-                            "-o", objPath,
-                        ]
-                        // 用環境變數告訴 Clang 頭文件位置（dylib 不轉發 -I 參數）
-                        let incPath = (sdk as NSString).appendingPathComponent("usr/include")
-                        setenv("C_INCLUDE_PATH", incPath, 1)
-                        (rc, diag) = runNative(args, paxidx_clang_compile)
+                        if ext == "m" || ext == "mm" { hasObjC = true }
+                        if ext == "cpp" || ext == "cc" || ext == "mm" { hasCpp = true }
+                        r = CoreCompilerService.compileC(source: srcURL, object: objURL, sdk: sdk.url, res: res)
                     }
-                    if rc != 0 {
-                        if !diag.isEmpty { log(diag) }
-                        return "編譯 \(src) 失敗（rc=\(rc)）"
+                    if r.rc != 0 {
+                        if !r.report.isEmpty { log(r.report) }
+                        return "編譯 \(src) 失敗（rc=\(r.rc)）"
                     }
                 }
-
-                // 鏈接
-                if objects.count > 1 {
-                    log("注意：多個源文件會一起鏈接；Swift 與 C 混編的進入點只能留一個")
+                log("連結…")
+                let exeURL = buildDir.appendingPathComponent(project.name)
+                let lr = CoreCompilerService.link(objects: objects, output: exeURL, sdk: sdk.url,
+                                                  hasObjC: hasObjC, hasSwift: hasSwift, hasCpp: hasCpp)
+                if lr.rc != 0 {
+                    if !lr.report.isEmpty { log(lr.report) }
+                    return "連結失敗（rc=\(lr.rc)）"
                 }
-                if !ToolchainManager.shared.isSysrootInstalled {
-                    return "系統函式庫（sysroot）尚未安裝（到設定頁點「安裝系統函式庫」）"
-                }
-                log("鏈接…")
-                let exePath = buildDir.appendingPathComponent(project.name).path
-                // FORCE_LOAD 替身目標文件：SDK 以 .tbd 宣告的 libswift* 迷你
-                // 庫裡有 22 支在 iOS 15 系統裡沒有真身（_errno／_math／_stdio
-                // 等 C 墊片模塊與若干新系統模塊，實現都在父庫裡），偏偏每個
-                // 消費者物件都會引用它們的 __swift_FORCE_LOAD_$_swift* 標記
-                // 符號——裝置 lld 讀 .tbd 等於讀空，符號無處可連（2026-10-26
-                // 真機日誌實證 12 個未定義）。比照橋接層 swiftCompatibility56
-                // 替身的做法：隨鏈接附一顆手造目標文件（forceLoadStubBase64，
-                // 22 個符號各一個 8 位元組零值全域）在本程序內定義這批符號；
-                // 無人解引用、不產生任何載入命令，運行時不會去找不存在的庫。
-                var linkObjects = objects
-                let stubPath = buildDir.appendingPathComponent("paxidx-forceload-stub.o").path
-                if let stubData = Data(base64Encoded: Self.forceLoadStubBase64) {
-                    try? stubData.write(to: URL(fileURLWithPath: stubPath))
-                    if FileManager.default.fileExists(atPath: stubPath) {
-                        linkObjects.append(stubPath)
-                    }
-                }
-                // TBD 診斷（實驗，2026-10-26 永帥選定「先做廉價診斷」）：
-                // 把 SDK 的 .tbd 當連結輸入餵給裝置 lld，驗證它在裝置真
-                // 連結裡到底讀不讀 .tbd——TextAPI 的符號在工具鏈 dylib
-                // 裡實在，但從未在裝置上實證；當年只有一行舊日誌的
-                // "unhandled file type"（正是 libSystem.tbd 這支）。兩支
-                // .tbd 宣告的安裝名與 sysroot 真身相同，縱使被用來綁
-                // 符號，產物記的仍是系統原名，不影響運行。判定：連結如
-                // 常成功＝讀得了；報 unhandled file type＝裝置驅動沒開
-                // 讀取；報 tapi 解析錯＝讀了但版本不合。
-                for tbdRel in ["usr/lib/libSystem.tbd",
-                               "System/Library/Frameworks/Foundation.framework/Foundation.tbd"] {
-                    let tbdPath = (sdk as NSString).appendingPathComponent(tbdRel)
-                    if FileManager.default.fileExists(atPath: tbdPath) {
-                        linkObjects.append(tbdPath)
-                        log("TBD 診斷：加入連結輸入 \(tbdRel)")
-                    }
-                }
-                let ldArgs = ["ld", "-o", exePath] + linkObjects + [
-                    "-target", "arm64-apple-ios15.0",
-                    "-isysroot", sdk,
-                ]
-                let (ldRc, ldDiag) = runNative(ldArgs, paxidx_ld_link)
-                if ldRc != 0 {
-                    if !ldDiag.isEmpty { log(ldDiag) }
-                    return "鏈接失敗（rc=\(ldRc)）"
-                }
-
-                log("編譯完成：\(exePath)")
+                log("編譯完成：\(exeURL.path)")
                 return nil
             },
             BuildStage(name: "打包 IPA") { log in
