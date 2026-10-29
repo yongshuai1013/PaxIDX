@@ -155,6 +155,7 @@ struct BuildView: View {
                 title: Text("新建文件"),
                 buttons: [
                     .default(Text("C 源文件")) { createNewFile(type: "c") },
+                    .default(Text("Objective-C 源文件")) { createNewFile(type: "m") },
                     .default(Text("Swift 源文件")) { createNewFile(type: "swift") },
                     .default(Text("頭文件")) { createNewFile(type: "h") },
                     .default(Text("空白文件")) { createNewFile(type: "txt") },
@@ -173,6 +174,9 @@ struct BuildView: View {
         case "c":
             ext = "c"
             template = "#include <stdio.h>\n\nint main() {\n    printf(\"Hello\\n\");\n    return 0;\n}\n"
+        case "m":
+            ext = "m"
+            template = "#import <Foundation/Foundation.h>\n\nint main(int argc, char *argv[]) {\n    @autoreleasepool {\n        NSLog(@\"Hello\");\n    }\n    return 0;\n}\n"
         case "swift":
             ext = "swift"
             template = "print(\"Hello\")\n"

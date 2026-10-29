@@ -75,11 +75,28 @@ struct ProjectDetailView: View {
             }
         }
         .onAppear(perform: reloadFiles)
-        .alert("重命名", isPresented: $showRenameAlert) {
-            TextField("新名稱", text: $newName)
-            Button("取消", role: .cancel) { }
-            Button("確定") {
-                renameFile(from: renameTarget, to: newName)
+        .sheet(isPresented: $showRenameAlert) {
+            NavigationView {
+                Form {
+                    Section(header: Text("新名稱")) {
+                        TextField("新名稱", text: $newName)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                    }
+                    Section {
+                        Button("確定") {
+                            renameFile(from: renameTarget, to: newName)
+                            showRenameAlert = false
+                        }
+                    }
+                }
+                .navigationTitle("重命名")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("取消") { showRenameAlert = false }
+                    }
+                }
             }
         }
         .sheet(isPresented: $showEditor) {
