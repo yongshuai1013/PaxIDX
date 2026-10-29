@@ -789,6 +789,40 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
                     }
+                // ---- G2 判別：分離「blob 形狀」與「路徑／信任政策」 ----
+                // 丙＝bundle 內已知良品（lib_CompilerSwiftSyntax）的 tmp 副本直載；
+                // 丁＝同一良品複本經自家簽名器重簽後載。四格矩陣定病根。
+                {
+                    nyxMark("G2 start");
+                    NSString *fwSyntax = [[[NSBundle mainBundle] bundlePath]
+                        stringByAppendingPathComponent:@"Frameworks/lib_CompilerSwiftSyntax.dylib"];
+                    auto tryLoadRaw = [&](NSString *p, const char *tag) {
+                        void *h = dlopen(p.UTF8String, RTLD_NOW);
+                        if (!h) {
+                            line(std::string(tag) + "：dlopen 失敗：" + (dlerror() ?: "(null)"));
+                        } else {
+                            line(std::string(tag) + "：dlopen 成功");
+                        }
+                    };
+                    if ([fm fileExistsAtPath:fwSyntax]) {
+                        NSString *copyC = [dir stringByAppendingPathComponent:@"libcopy_syntax.dylib"];
+                        if (![fm fileExistsAtPath:copyC]) [fm copyItemAtPath:fwSyntax toPath:copyC error:nil];
+                        tryLoadRaw(copyC, "G2[丙 良品tmp副本]");
+                        NSString *copyD = [dir stringByAppendingPathComponent:@"libresign_syntax.dylib"];
+                        [fm removeItemAtPath:copyD error:nil];
+                        if ([fm copyItemAtPath:fwSyntax toPath:copyD error:nil]) {
+                            std::string ddetail;
+                            bool dok = paxAdhocSignMachO(copyD.UTF8String, ddetail);
+                            line(std::string("G2[丁 簽名器@良品]：") + ddetail);
+                            if (dok) tryLoadRaw(copyD, "G2[丁 良品重簽]");
+                        } else {
+                            line("G2[丁]：複製良品失敗");
+                        }
+                    } else {
+                        line("G2：bundle 內找不到 lib_CompilerSwiftSyntax.dylib");
+                    }
+                    nyxMark("G2 done");
+                }
                 } else {
                     line("G：probe_g.o 不存在，跳過連結");
                 }
