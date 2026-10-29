@@ -392,6 +392,27 @@ static NSString *nyxPackagedSDKPath(void) {
 }
 
 
+
+// ---- JIT／除錯狀態讀數 ----
+// 「有沒有 JIT」不能靠 UI 感覺，要量進程自己的 csflags：
+// CS_DEBUGGED(0x10000000) 有亮才算真掛上除錯器；
+// 另以 sysctl 的 P_TRACED(0x800) 交叉確認。
+extern "C" int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#include <sys/sysctl.h>
+static void paxReportJitState(const char *tag, std::string &out) {
+    uint32_t flags = 0;
+    int rc = csops(getpid(), 0, &flags, sizeof(flags)); // CS_OPS_STATUS = 0
+    bool traced = false;
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, 0};
+    mib[3] = getpid();
+    struct kinfo_proc kp; size_t klen = sizeof(kp);
+    if (sysctl(mib, 4, &kp, &klen, NULL, 0) == 0) traced = (kp.kp_proc.p_flag & 0x800) != 0; // P_TRACED
+    char buf[220];
+    snprintf(buf, sizeof(buf), "%s：csops rc=%d csflags=0x%08x CS_DEBUGGED=%s P_TRACED=%s",
+        tag, rc, flags, (flags & 0x10000000) ? "有" : "無", traced ? "有" : "無");
+    out += buf; out += "\n";
+}
+
 // ---- App 內 adhoc 簽名器（ldid 形狀的正規 superblob）----
 // lld -adhoc_codesign 產的簽名 iOS 15 dyld 不接受（G 段實證）；
 // 這裡在 lld 已預留的 LC_CODE_SIGNATURE 區間內，原地換上自組的
@@ -756,6 +777,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             // 自組的 ldid 形狀 superblob——乙本過了，產出補簽路線即成立。
             {
                 nyxMark("G start");
+                paxReportJitState("G 段執行當下", report);
                 NSString *gsrc = [dir stringByAppendingPathComponent:@"probe_g.c"];
                 NSString *gobj = [dir stringByAppendingPathComponent:@"probe_g.o"];
                 [@"int paxidx_g_answer(void) { return 42; }\n" writeToFile:gsrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
