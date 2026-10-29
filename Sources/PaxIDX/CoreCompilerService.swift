@@ -59,8 +59,7 @@ enum CoreCompilerService {
                     "-internal-externc-isystem", sdk.appendingPathComponent("usr/include").path]
         if isObjC {
             let rd = clangResourceDir(sdk: sdk, res: res)
-            args += ["-F" + sdk.appendingPathComponent("System/Library/Frameworks").path,
-                     "-F" + sdk.appendingPathComponent("System/Library/SubFrameworks").path,
+            args += ["-F" + sdk.appendingPathComponent("System/Library/SubFrameworks").path,
                      "-resource-dir", rd,
                      "-internal-isystem", rd + "/include",
                      "-D__GNUC__=4", "-D__GNUC_MINOR__=2", "-D__GNUC_PATCHLEVEL__=1",
