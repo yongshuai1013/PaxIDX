@@ -1019,7 +1019,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             std::string kdetail;
                             bool kok = paxGraftSignMachO(glibG.UTF8String, donorP.UTF8String, kdetail);
                             line(std::string("G8[癸 graft@自產probe]：") + kdetail);
-                            if (kok) tryLoad(glibG, "G8[癸 graft自產]");
+                            if (kok) { tryLoad(glibG, "G8[癸 graft自產]"); { std::string d; paxDumpSuperblob(glibG.UTF8String, "癸產出", d); line(d); } }
                         } else {
                             line("G8[癸]：複製 lld 產出失敗");
                         }
@@ -1068,6 +1068,31 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                                 bool xok = paxGraftSignMachO(copyX.UTF8String, fwSyntax.UTF8String, xdetail);
                                 line(std::string("G7[辛 graft@良品]：") + xdetail);
                                 if (xok) { tryLoadRaw(copyX, "G7[辛 graft重簽良品]"); { std::string d; paxDumpSuperblob(copyX.UTF8String, "辛產出", d); line(d); } }
+                        {
+                            NSString *fwDir2 = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/Frameworks"];
+                            NSArray *subs = [fm contentsOfDirectoryAtPath:fwDir2 error:nil];
+                            NSString *smallest = nil; unsigned long long best = ~0ULL;
+                            for (NSString *s in subs) {
+                                if (![s hasSuffix:@".dylib"]) continue;
+                                NSString *p = [fwDir2 stringByAppendingPathComponent:s];
+                                unsigned long long sz = [[fm attributesOfItemAtPath:p error:nil] fileSize];
+                                if (sz < best) { best = sz; smallest = p; }
+                            }
+                            if (smallest) {
+                                NSString *g4 = [dir stringByAppendingPathComponent:@"libprobe_g_small.dylib"];
+                                [fm removeItemAtPath:g4 error:nil];
+                                if ([fm copyItemAtPath:smallest toPath:g4 error:nil]) {
+                                    line(std::string("G9[壬]：最小 bundle dylib = ") + smallest.lastPathComponent.UTF8String + "（" + std::to_string(best) + "B）");
+                                    std::string jdetail;
+                                    bool jok = paxGraftSignMachO(g4.UTF8String, fwSyntax.UTF8String, jdetail);
+                                    line(std::string("G9[壬 graft@小良品]：") + jdetail);
+                                    if (jok) {
+                                        void *jh = dlopen(g4.UTF8String, RTLD_NOW);
+                                        line(std::string("G9[壬 graft小良品]：") + (jh ? "dlopen 成功" : std::string("dlopen 失敗：") + (dlerror() ?: "(null)")));
+                                    }
+                                }
+                            }
+                        }
                             } else {
                                 line("G7[辛]：複製良品失敗");
                             }
