@@ -453,12 +453,12 @@ static bool paxAdhocSignMachO(const char *path, std::string &detail) {
         lcOff += csize;
     }
     if (!sigOff || !sigSize) { detail = "無 LC_CODE_SIGNATURE 預留區（連結須帶 -adhoc_codesign）"; return false; }
-    for (int attempt = 0; attempt < 2; attempt++) {
-        uint32_t pageExp = attempt == 0 ? 12 : 14;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint32_t pageExp = attempt == 2 ? 14 : 12;
         uint32_t pageSize = 1u << pageExp;
         uint32_t codeLimit = sigOff;
         uint32_t nCode = (codeLimit + pageSize - 1) / pageSize;
-        const uint32_t nSpecial = 2;
+        const uint32_t nSpecial = attempt == 1 ? 0 : 2;
         const uint32_t cdHeader = 88;
         const uint32_t identLen = 2; // "-\0"
         const uint32_t teamLen = 1;  // "\0"
@@ -467,20 +467,23 @@ static bool paxAdhocSignMachO(const char *path, std::string &detail) {
         const uint32_t reqLen = 12;
         const uint32_t cmsLen = 8;
         auto align16 = [](uint32_t v) { return (v + 15) & ~(uint32_t)15; };
-        uint32_t cdOff = 36; // superblob header 12 + 3 個 index 條目 * 8
+        uint32_t cdOff = attempt == 1 ? 20 : 36; // superblob header 12 + index 條目 * 8
         uint32_t reqOff = align16(cdOff + cdLen);
         uint32_t cmsOff = align16(reqOff + reqLen);
         uint32_t total = cmsOff + cmsLen;
+        if (attempt == 1) total = cdOff + cdLen;
         if (total > sigSize) continue;
         std::vector<uint8_t> blob(total, 0);
         auto wr32 = [&](size_t off, uint32_t v) { uint32_t be = OSSwapHostToBigInt32(v); memcpy(blob.data() + off, &be, 4); };
         auto wr64 = [&](size_t off, uint64_t v) { uint64_t be = OSSwapHostToBigInt64(v); memcpy(blob.data() + off, &be, 8); };
-        wr32(0, 0xfade0cc0); wr32(4, total); wr32(8, 3);
+        wr32(0, 0xfade0cc0); wr32(4, total); wr32(8, attempt == 1 ? 1 : 3);
         wr32(12, 0); wr32(16, cdOff);
-        wr32(20, 2); wr32(24, reqOff);
-        wr32(28, 0x10000); wr32(32, cmsOff);
-        wr32(reqOff, 0xfade0c01); wr32(reqOff + 4, reqLen); wr32(reqOff + 8, 1);
-        wr32(cmsOff, 0xfade0b01); wr32(cmsOff + 4, cmsLen);
+        if (attempt != 1) {
+            wr32(20, 2); wr32(24, reqOff);
+            wr32(28, 0x10000); wr32(32, cmsOff);
+            wr32(reqOff, 0xfade0c01); wr32(reqOff + 4, reqLen); wr32(reqOff + 8, 0);
+            wr32(cmsOff, 0xfade0b01); wr32(cmsOff + 4, cmsLen);
+        }
         size_t cd = cdOff;
         wr32(cd + 0, 0xfade0c02); wr32(cd + 4, cdLen); wr32(cd + 8, 0x20400);
         wr32(cd + 12, 0x2); // flags = CS_ADHOC
@@ -499,7 +502,7 @@ static bool paxAdhocSignMachO(const char *path, std::string &detail) {
         wr64(cd + 80, 0);
         memcpy(blob.data() + cd + cdHeader, "-", identLen);
         size_t specialBase = cd + hashOff - nSpecial * 32;
-        CC_SHA256(blob.data() + reqOff, reqLen, blob.data() + specialBase); // slot -2 = requirements
+        if (nSpecial > 0) CC_SHA256(blob.data() + reqOff, reqLen, blob.data() + specialBase); // slot -2 = requirements
         for (uint32_t s = 0; s < nCode; s++) {
             uint32_t start = s * pageSize;
             uint32_t len = pageSize < (codeLimit - start) ? pageSize : (codeLimit - start);
@@ -514,9 +517,10 @@ static bool paxAdhocSignMachO(const char *path, std::string &detail) {
         char buf[160];
         snprintf(buf, sizeof(buf), "補簽完成（superblob %u／預留 %u 位元組、頁 %u、代碼槽 %u）", total, sigSize, pageSize, nCode);
         detail = buf;
+        if (attempt == 1) detail += "［緊湊模式］";
         return true;
     }
-    detail = "簽名預留區太小，兩種頁大小都不夠";
+    detail = "簽名預留區太小，三種模式都不夠";
     return false;
 }
 
