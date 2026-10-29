@@ -92,7 +92,8 @@ enum CoreCompilerService {
         args += objects.map { $0.path }
         if hasObjC || hasSwift {
             args += ["-F" + sdk.appendingPathComponent("System/Library/Frameworks").path,
-                     "-framework", "Foundation", "-lobjc"]
+                     "-framework", "Foundation", "-framework", "UIKit",
+                     "-framework", "CoreGraphics", "-lobjc"]
         }
         if hasCpp { args.append("-lc++") }
         if hasSwift {
