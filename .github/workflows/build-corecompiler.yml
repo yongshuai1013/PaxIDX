@@ -40,12 +40,24 @@ jobs:
           ls Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs | head -20
           ls Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs/LLVM.xcframework
 
+      - name: 寫 prefix 頭（解 LLVM MachO.h 與 26 SDK mach/machine.h 的同名宏衝突）
+        run: |
+          cat > Nyxian/Frameworks/CoreCompiler/pax_prefix.h <<'EOF'
+          #include <mach/machine.h>
+          #undef CPU_SUBTYPE_ARM_V8M_MAIN
+          #undef CPU_SUBTYPE_ARM_V8M_BASE
+          #undef CPU_SUBTYPE_ARM_V8_1M_MAIN
+          EOF
+          cat Nyxian/Frameworks/CoreCompiler/pax_prefix.h
+
       - name: 編 CoreCompiler target（部署目標 15.0）
         working-directory: Nyxian
         run: |
           xcodebuild -project Nyxian.xcodeproj -target CoreCompiler \
             -configuration Release -sdk iphoneos \
             IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            OTHER_CFLAGS='$(inherited) -include $PWD/Frameworks/CoreCompiler/pax_prefix.h' \
+            OTHER_CPLUSPLUSFLAGS='$(inherited) -include $PWD/Frameworks/CoreCompiler/pax_prefix.h' \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             SYMROOT="$PWD/build" build
 
