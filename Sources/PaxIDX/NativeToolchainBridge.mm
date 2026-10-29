@@ -580,6 +580,117 @@ static void paxDumpSuperblob(const char *path, const char *tag, std::string &out
     }
 }
 
+static bool paxGraftSignMachO(const char *path, const char *donorPath, std::string &detail) {
+    auto readFile = [](const char *p, std::vector<uint8_t> &out) -> bool {
+        FILE *f = fopen(p, "rb"); if (!f) return false;
+        fseek(f, 0, SEEK_END); long s = ftell(f); fseek(f, 0, SEEK_SET);
+        if (s <= 0) { fclose(f); return false; }
+        out.resize((size_t)s);
+        bool ok = fread(out.data(), 1, out.size(), f) == out.size();
+        fclose(f); return ok;
+    };
+    auto be32 = [](const uint8_t *p) -> uint32_t {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    };
+    std::vector<uint8_t> donor, img;
+    if (!readFile(donorPath, donor)) { detail = "讀 donor 失敗"; return false; }
+    if (!readFile(path, img)) { detail = "讀產物失敗"; return false; }
+    auto findCS = [&](const std::vector<uint8_t> &m, uint32_t &off, uint32_t &size, uint64_t &textFS) -> bool {
+        if (m.size() < 32) return false;
+        uint32_t magic; memcpy(&magic, m.data(), 4);
+        if (magic != 0xfeedfacf) return false;
+        uint32_t ncmds; memcpy(&ncmds, m.data() + 16, 4);
+        size_t lc = 32; off = 0; size = 0; textFS = 0;
+        for (uint32_t i = 0; i < ncmds && lc + 8 <= m.size(); i++) {
+            uint32_t cmd, csize; memcpy(&cmd, m.data() + lc, 4); memcpy(&csize, m.data() + lc + 4, 4);
+            if (csize < 8) break;
+            if (cmd == 0x1d) { memcpy(&off, m.data() + lc + 8, 4); memcpy(&size, m.data() + lc + 12, 4); }
+            else if (cmd == 0x19) { char nm[17] = {0}; memcpy(nm, m.data() + lc + 8, 16); if (strcmp(nm, "__TEXT") == 0) memcpy(&textFS, m.data() + lc + 48, 8); }
+            lc += csize;
+        }
+        return off && size;
+    };
+    uint32_t dOff, dSize; uint64_t dText;
+    if (!findCS(donor, dOff, dSize, dText)) { detail = "donor 無簽名區"; return false; }
+    const uint8_t *dsb = donor.data() + dOff;
+    uint32_t dCnt = be32(dsb + 8);
+    std::vector<uint8_t> donorCD, donorReq, donorCMS, donorAlt;
+    for (uint32_t k = 0; k < dCnt; k++) {
+        uint32_t t = be32(dsb + 12 + k * 8), o = be32(dsb + 12 + k * 8 + 4);
+        uint32_t len = be32(dsb + o + 4);
+        if (dOff + o + len > donor.size()) continue;
+        std::vector<uint8_t> part(dsb + o, dsb + o + len);
+        if (t == 0) donorCD = part;
+        else if (t == 2) donorReq = part;
+        else if (t == 65536) donorCMS = part;
+        else if (t == 4096) donorAlt = part;
+    }
+    if (donorCD.empty() || donorReq.empty() || donorCMS.empty() || donorAlt.empty()) { detail = "donor 組件不全"; return false; }
+    auto cdStr = [&](const std::vector<uint8_t> &cd, size_t off) -> std::string {
+        if (off == 0 || off >= cd.size()) return std::string();
+        return std::string((const char *)cd.data() + off);
+    };
+    std::string ident = cdStr(donorAlt, be32(donorAlt.data() + 20));
+    std::string team = cdStr(donorAlt, be32(donorAlt.data() + 48));
+    uint32_t sigOff, sigSize; uint64_t textFS;
+    if (!findCS(img, sigOff, sigSize, textFS)) { detail = "產物無簽名預留區"; return false; }
+    uint32_t pageSize = 4096;
+    uint32_t codeLimit = sigOff;
+    uint32_t nCode = (codeLimit + pageSize - 1) / pageSize;
+    const uint32_t nSpecial = 2, cdHeader = 88;
+    uint32_t identLen = (uint32_t)ident.size() + 1;
+    uint32_t teamLen = (uint32_t)team.size() + 1;
+    uint32_t hashOff = cdHeader + identLen + teamLen + nSpecial * 32;
+    uint32_t cdLen = hashOff + nCode * 32;
+    uint32_t hdr = 12 + 4 * 8;
+    uint32_t oCD = hdr;
+    uint32_t oReq = oCD + (uint32_t)donorCD.size();
+    uint32_t oAlt = oReq + (uint32_t)donorReq.size();
+    uint32_t oCMS = oAlt + cdLen;
+    uint32_t total = oCMS + (uint32_t)donorCMS.size();
+    if (total > sigSize) { detail = "graft superblob 放不進預留區"; return false; }
+    std::vector<uint8_t> blob(total, 0);
+    auto wr32 = [&](size_t o, uint32_t v) { uint32_t b = OSSwapHostToBigInt32(v); memcpy(blob.data() + o, &b, 4); };
+    auto wr64 = [&](size_t o, uint64_t v) { uint64_t b = OSSwapHostToBigInt64(v); memcpy(blob.data() + o, &b, 8); };
+    wr32(0, 0xfade0cc0); wr32(4, total); wr32(8, 4);
+    wr32(12, 0); wr32(16, oCD);
+    wr32(20, 2); wr32(24, oReq);
+    wr32(28, 4096); wr32(32, oAlt);
+    wr32(36, 65536); wr32(40, oCMS);
+    memcpy(blob.data() + oCD, donorCD.data(), donorCD.size());
+    memcpy(blob.data() + oReq, donorReq.data(), donorReq.size());
+    memcpy(blob.data() + oCMS, donorCMS.data(), donorCMS.size());
+    size_t cd = oAlt;
+    wr32(cd + 0, 0xfade0c02); wr32(cd + 4, cdLen); wr32(cd + 8, 0x20400);
+    wr32(cd + 12, 0);
+    wr32(cd + 16, hashOff);
+    wr32(cd + 20, cdHeader);
+    wr32(cd + 24, nSpecial); wr32(cd + 28, nCode);
+    wr32(cd + 32, codeLimit);
+    blob[cd + 36] = 32; blob[cd + 37] = 2; blob[cd + 38] = 0; blob[cd + 39] = 12;
+    wr32(cd + 48, cdHeader + identLen);
+    wr64(cd + 72, textFS);
+    memcpy(blob.data() + cd + cdHeader, ident.c_str(), identLen);
+    memcpy(blob.data() + cd + cdHeader + identLen, team.c_str(), teamLen);
+    size_t specialBase = cd + hashOff - nSpecial * 32;
+    CC_SHA256(donorReq.data(), (CC_LONG)donorReq.size(), blob.data() + specialBase);
+    for (uint32_t s = 0; s < nCode; s++) {
+        uint32_t start = s * pageSize;
+        uint32_t len = pageSize < (codeLimit - start) ? pageSize : (codeLimit - start);
+        CC_SHA256(img.data() + start, len, blob.data() + cd + hashOff + s * 32);
+    }
+    FILE *o = fopen(path, "r+b");
+    if (!o) { detail = "重開產物寫入失敗"; return false; }
+    fseek(o, (long)sigOff, SEEK_SET);
+    fwrite(blob.data(), 1, total, o);
+    if (total < sigSize) { std::vector<uint8_t> z(sigSize - total, 0); fwrite(z.data(), 1, z.size(), o); }
+    fclose(o);
+    char buf[220];
+    snprintf(buf, sizeof(buf), "graft 補簽完成（superblob %u／預留 %u、alt ident=%s）", total, sigSize, ident.c_str());
+    detail = buf;
+    return true;
+}
+
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     static std::atomic<bool> s_running{false};
     if (s_running.exchange(true)) {
@@ -913,6 +1024,19 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             bool dok = paxAdhocSignMachO(copyD.UTF8String, ddetail);
                             line(std::string("G2[丁 簽名器@良品]：") + ddetail);
                             if (dok) { tryLoadRaw(copyD, "G2[丁 良品重簽]"); { std::string d; paxDumpSuperblob(copyD.UTF8String, "丁產出", d); line(d); } }
+                        {
+                            NSString *copyX = [dir stringByAppendingPathComponent:@"libgraft_syntax.dylib"];
+                            [fm removeItemAtPath:copyX error:nil];
+                            if ([fm copyItemAtPath:fwSyntax toPath:copyX error:nil]) {
+                                std::string xdetail;
+                                bool xok = paxGraftSignMachO(copyX.UTF8String, fwSyntax.UTF8String, xdetail);
+                                line(std::string("G7[辛 graft@良品]：") + xdetail);
+                                if (xok) { tryLoadRaw(copyX, "G7[辛 graft重簽良品]"); { std::string d; paxDumpSuperblob(copyX.UTF8String, "辛產出", d); line(d); } }
+                            } else {
+                                line("G7[辛]：複製良品失敗");
+                            }
+                        }
+
                         } else {
                             line("G2[丁]：複製良品失敗");
                         }
