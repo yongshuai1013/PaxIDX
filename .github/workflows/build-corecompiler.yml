@@ -50,6 +50,20 @@ jobs:
           EOF
           cat Nyxian/Frameworks/CoreCompiler/pax_prefix.h
 
+      - name: 補上游源碼的世代差（Clang 21 構造函數簽名）
+        working-directory: Nyxian
+        run: |
+          python3 - <<'PYEOF'
+          import io
+          p = 'Frameworks/CoreCompiler/Tools/CCDependencyScanner.cpp'
+          s = io.open(p, encoding='utf-8').read()
+          old = 'DependencyScanningService(ScanningMode::DependencyDirectivesScan, ScanningOutputFormat::Make, CASOptions{}, /*CAS=*/nullptr, /*Cache=*/nullptr, /*SharedFS=*/nullptr)'
+          new = 'DependencyScanningService(ScanningMode::DependencyDirectivesScan, ScanningOutputFormat::Make, CASOptions{}, /*CAS=*/nullptr, /*Cache=*/nullptr)'
+          assert s.count(old) == 1, 'pattern not found'
+          io.open(p, 'w', encoding='utf-8').write(s.replace(old, new))
+          print('patched CCDependencyScanner.cpp: dropped SharedFS arg (removed in Clang 21)')
+          PYEOF
+
       - name: 編 CoreCompiler target（部署目標 15.0）
         working-directory: Nyxian
         run: |
