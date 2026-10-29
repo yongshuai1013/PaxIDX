@@ -97,10 +97,12 @@ jobs:
             unzip -o -q /tmp/nyx/Payload/Nyxian.app/Shared/swift.zip "swift/shims/*" "swift/clang/*" "swift/module.modulemap" -d /tmp/nyxres
             curl -sSL -o /tmp/darwin-sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
             unzip -o -q /tmp/darwin-sdk.zip -d /tmp/paxsdkfull
-            SDKROOT2=$(find /tmp/paxsdkfull -maxdepth 3 -type d -name "iPhoneOS.sdk" | head -1)
+            unzip -l /tmp/darwin-sdk.zip | head -5
+            SDKROOT2=$(find /tmp/paxsdkfull -maxdepth 3 -type d -name "iPhoneOS*.sdk" | head -1)
             echo "原始 SDK 來源：$SDKROOT2"
             rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
-            cp -R "$SDKROOT2" /tmp/paxsdk/iPhoneOS.sdk
+            mkdir -p /tmp/paxsdk/iPhoneOS.sdk
+            cp -R "$SDKROOT2/." /tmp/paxsdk/iPhoneOS.sdk/
             rm -f /tmp/paxsdk/iPhoneOS.sdk/usr/lib/swift/libswiftAuthenticationServicesSwiftSDKOverlay.a
             cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap /tmp/paxsdk/res/
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
