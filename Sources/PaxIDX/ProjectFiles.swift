@@ -51,18 +51,29 @@ final class ProjectFiles {
     }
 
     /// 新建項目：建目錄 + 寫 project.json + 放一個 main.c 範例
-    static func createProject(name: String, bundleID: String) throws {
+    static func createProject(name: String, bundleID: String, sdkFolder: String? = nil) throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.contains("/") else { throw ProjectError.invalidName }
         let dir = directory(for: trimmed)
         guard !FileManager.default.fileExists(atPath: dir.path) else { throw ProjectError.alreadyExists }
         try FileManager.default.createDirectory(at: sourcesDirectory(for: trimmed), withIntermediateDirectories: true)
-        let project = Project(name: trimmed, bundleID: bundleID)
+        let project = Project(name: trimmed, bundleID: bundleID, sdkFolder: sdkFolder)
         let data = try JSONEncoder().encode(project)
         try data.write(to: dir.appendingPathComponent("project.json"))
         // 放一個最小可編譯的 main.c 範例
         let sample = "#include <stdio.h>\nint main() { printf(\"Hello, PaxIDX!\\n\"); return 0; }\n"
         try sample.write(to: sourcesDirectory(for: trimmed).appendingPathComponent("main.c"), atomically: true, encoding: .utf8)
+    }
+
+    /// 更新項目的 SDK 選擇（寫回 project.json）
+    static func updateSDKFolder(name: String, folder: String?) {
+        let metaURL = directory(for: name).appendingPathComponent("project.json")
+        guard let data = try? Data(contentsOf: metaURL),
+              var p = try? JSONDecoder().decode(Project.self, from: data) else { return }
+        p.sdkFolder = folder
+        if let out = try? JSONEncoder().encode(p) {
+            try? out.write(to: metaURL)
+        }
     }
 
     /// 刪除項目（整個目錄）

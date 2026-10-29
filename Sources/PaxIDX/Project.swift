@@ -10,10 +10,14 @@ struct Project: Identifiable, Codable, Equatable {
     var bundleID: String
     /// 版本號
     var version: String
+    /// 建立專案時選定的 SDK（PaxSDKStore 的 folderName，如
+    /// iphoneos-27.sdk）；nil＝未指定，編譯時用最新已安裝的一版
+    var sdkFolder: String?
 
-    init(name: String, bundleID: String, version: String = "1.0") {
+    init(name: String, bundleID: String, version: String = "1.0", sdkFolder: String? = nil) {
         self.name = name
         self.bundleID = bundleID
         self.version = version
+        self.sdkFolder = sdkFolder
     }
 }

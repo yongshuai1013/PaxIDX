@@ -24,7 +24,7 @@ struct SettingsView: View {
                     NavigationLink(destination: SDKDownloadView()) {
                         Text("下載 SDK")
                     }
-                    Text("編譯用的 SDK 只剩這一件：iPhoneOS 26 世代 SDK＋自編編譯器資源，從 GitHub release 下載解壓，編譯時直接使用")
+                    Text("編譯用的 SDK（26／27 世代並存）從 GitHub release 下載解壓；用哪一版在建立專案時選擇")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

@@ -69,6 +69,8 @@ struct NewProjectView: View {
     @Environment(\.presentationMode) private var presentationMode
     @State private var name = ""
     @State private var bundleID = ""
+    @State private var installedSDKs: [PaxSDKStore.InstalledSDK] = []
+    @State private var selectedSDKFolder = ""
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var activeProject: Project?
@@ -82,17 +84,38 @@ struct NewProjectView: View {
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
                 }
+                Section(header: Text("編譯 SDK")) {
+                    if installedSDKs.isEmpty {
+                        Text("尚未安裝 SDK（可到設定→「下載 SDK」取得；先建立專案也可以，編譯前裝好即可）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("SDK 版本", selection: $selectedSDKFolder) {
+                            ForEach(installedSDKs) { sdk in
+                                Text("iOS \(sdk.version)").tag(sdk.folderName)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
                 Section {
                     Button("建立") {
                         do {
                             let bid = bundleID.isEmpty ? "com.example.\(name)" : bundleID
-                            try ProjectFiles.createProject(name: name, bundleID: bid)
+                            try ProjectFiles.createProject(name: name, bundleID: bid,
+                                                           sdkFolder: selectedSDKFolder.isEmpty ? nil : selectedSDKFolder)
                             presentationMode.wrappedValue.dismiss()
                         } catch {
                             errorMessage = error.localizedDescription
                             showError = true
                         }
                     }
+                }
+            }
+            .onAppear {
+                installedSDKs = PaxSDKStore.installedSDKs()
+                if selectedSDKFolder.isEmpty {
+                    selectedSDKFolder = installedSDKs.first?.folderName ?? ""
                 }
             }
             .navigationTitle("新專案")
