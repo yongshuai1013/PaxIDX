@@ -77,17 +77,22 @@ jobs:
 
       - name: 驗 framework
         run: |
-          FW=$(find Nyxian/build -name "CoreCompiler.framework" -type d | head -1)
+          FW=Nyxian/build/Release-iphoneos/CoreCompiler.framework
           echo "framework: $FW"
           ls -la "$FW"
+          test -f "$FW/CoreCompiler" || { echo "缺主二進制"; exit 1; }
+          SZ=$(stat -f%z "$FW/CoreCompiler")
+          echo "主二進制大小：$SZ"
+          test "$SZ" -gt 100000000 || { echo "主二進制太小（疑似抓到 EagerLinkingTBDs 存根）"; exit 1; }
           otool -l "$FW/CoreCompiler" | grep -A2 LC_BUILD_VERSION | head -6
-          ls "$FW/Frameworks" 2>/dev/null | head -20
+          ls "$FW/Frameworks" | head -20
+          ls "$FW/Frameworks" | wc -l
 
       - name: 上傳 framework artifact
         uses: actions/upload-artifact@v4
         with:
           name: CoreCompiler-6.4-ios15
-          path: Nyxian/build/**/CoreCompiler.framework
+          path: Nyxian/build/Release-iphoneos/CoreCompiler.framework
 
       - name: 備 res.zip（自編工具鏈的 shims＋clang 21 內建頭＋頂層表）
         env:
@@ -106,7 +111,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FW=$(find Nyxian/build -name "CoreCompiler.framework" -type d | head -1)
+          FW=Nyxian/build/Release-iphoneos/CoreCompiler.framework
           ditto -c -k --keepParent "$FW" CoreCompiler.framework.zip
           ls -la CoreCompiler.framework.zip
           gh release view corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || \
