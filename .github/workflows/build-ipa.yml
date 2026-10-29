@@ -9,6 +9,10 @@ on:
         description: '實驗包：內嵌改戳記（minos 15.0）版 Nyxian CoreCompiler'
         type: boolean
         default: false
+      sdk27:
+        description: 'SDK 換 27.1：抓 owngoal-dev/iOS-SDKs 分支 sdk/iPhoneOS27.1（Xcode 27.1 原版）打包'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -83,7 +87,16 @@ jobs:
             echo "nyx_test：組 PaxSDK.zip（完整原始 SDK＋BSROOT res，他們的打包法；S10 用）"
             # SDK 換 Xcode 26 原生 iphoneos SDK（CI 機 Xcode 26.6 的 26.5 世代，
             # 與自編 6.4 前端同世代）；部署目標 15 由探針 -target 指定。
-            SDKROOT2=$(xcrun --sdk iphoneos --show-sdk-path)
+            if [ "${{ inputs.sdk27 }}" = "true" ]; then
+              echo "SDK 來源：owngoal-dev/iOS-SDKs 分支 sdk/iPhoneOS27.1（Xcode 27.1 原版、未改）"
+              curl -sSL -o /tmp/sdk27.tar.gz "https://codeload.github.com/owngoal-dev/iOS-SDKs/tar.gz/refs/heads/sdk/iPhoneOS27.1"
+              mkdir -p /tmp/sdk27 && tar -xzf /tmp/sdk27.tar.gz -C /tmp/sdk27 --strip-components=1
+              SDKROOT2=$(find /tmp/sdk27 -maxdepth 2 -name 'iPhoneOS*.sdk' -type d | head -1)
+              RELTAG=paxsdk-ios27
+            else
+              SDKROOT2=$(xcrun --sdk iphoneos --show-sdk-path)
+              RELTAG=paxsdk-ios26
+            fi
             echo "Xcode SDK 來源：$SDKROOT2"
             ls "$SDKROOT2" | head -5
             rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
@@ -99,9 +112,9 @@ jobs:
             ls /tmp/paxsdk/res
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
             (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
-            echo "同版 PaxSDK.zip 發布到 release paxsdk-ios26（App 設定頁「下載 SDK」取用）"
-            gh release view paxsdk-ios26 --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create paxsdk-ios26 --repo yongshuai1013/PaxIDX --title "PaxSDK (iPhoneOS 26 + self-built res)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
-            gh release upload paxsdk-ios26 "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
+            echo "同版 PaxSDK.zip 發布到 release $RELTAG（App 設定頁「下載 SDK」取用）"
+            gh release view "$RELTAG" --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create "$RELTAG" --repo yongshuai1013/PaxIDX --title "PaxSDK ($RELTAG)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
+            gh release upload "$RELTAG" "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
