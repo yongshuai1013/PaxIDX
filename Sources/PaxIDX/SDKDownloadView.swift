@@ -1,4 +1,5 @@
 import SwiftUI
+import Zip
 
 /// 下載 SDK 頁（2026-10-29 永帥交代：原「下載管理」四件套改制）：
 /// 編譯用的 SDK 只剩這一件——PaxSDK.zip（iPhoneOS 26 世代 SDK＋自編
