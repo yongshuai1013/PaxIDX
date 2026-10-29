@@ -524,6 +524,62 @@ static bool paxAdhocSignMachO(const char *path, std::string &detail) {
     return false;
 }
 
+static void paxDumpSuperblob(const char *path, const char *tag, std::string &out) {
+    auto be32 = [](const uint8_t *p) -> uint32_t {
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    };
+    auto hex8 = [](const uint8_t *p) {
+        char b[20]; snprintf(b, sizeof(b), "%02x%02x%02x%02x%02x%02x%02x%02x", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]); return std::string(b);
+    };
+    FILE *fp = fopen(path, "rb");
+    if (!fp) { out += std::string("DUMP[") + tag + "] 開檔失敗\n"; return; }
+    fseek(fp, 0, SEEK_END); long fsz = ftell(fp); fseek(fp, 0, SEEK_SET);
+    std::vector<uint8_t> f((size_t)fsz);
+    if (fsz <= 0 || fread(f.data(), 1, (size_t)fsz, fp) != (size_t)fsz) { fclose(fp); out += std::string("DUMP[") + tag + "] 讀檔失敗\n"; return; }
+    fclose(fp);
+    if (fsz < 32 || !(f[0] == 0xcf && f[1] == 0xfa)) { out += std::string("DUMP[") + tag + "] 非 thin Mach-O\n"; return; }
+    const uint8_t *mh = f.data();
+    uint32_t ncmds = *(const uint32_t *)(mh + 16);
+    const uint8_t *p = mh + 32;
+    uint32_t sigOff = 0, sigSize = 0;
+    for (uint32_t i = 0; i < ncmds; i++) {
+        uint32_t cmd = *(const uint32_t *)p, csize = *(const uint32_t *)(p + 4);
+        if (cmd == 0x1d) { sigOff = *(const uint32_t *)(p + 8); sigSize = *(const uint32_t *)(p + 12); }
+        if (csize == 0) break;
+        p += csize;
+    }
+    char line1[512];
+    const uint8_t *sb = mh + sigOff;
+    uint32_t cnt = sigOff ? be32(sb + 8) : 0;
+    std::string idx;
+    for (uint32_t k = 0; k < cnt && k < 6; k++) {
+        uint32_t t = be32(sb + 12 + k * 8), o = be32(sb + 12 + k * 8 + 4);
+        char tb[96];
+        snprintf(tb, sizeof(tb), "[t%u m%x L%u]", t, be32(sb + o), be32(sb + o + 4));
+        idx += tb;
+    }
+    snprintf(line1, sizeof(line1), "DUMP[%s] size=%ld LC=0x%x+0x%x SBcnt=%u %s\n", tag, fsz, sigOff, sigSize, cnt, idx.c_str());
+    out += line1;
+    for (uint32_t k = 0; k < cnt; k++) {
+        uint32_t t = be32(sb + 12 + k * 8), o = be32(sb + 12 + k * 8 + 4);
+        if (be32(sb + o) != 0xfade0c02) continue;
+        const uint8_t *cd = sb + o;
+        uint32_t ver = be32(cd + 8), fl = be32(cd + 12), hOff = be32(cd + 16);
+        uint32_t nSp = be32(cd + 24), nCode = be32(cd + 28), cLim = be32(cd + 32);
+        uint32_t hSize = cd[36], hType = cd[37], pExp = cd[39];
+        uint32_t iOff = be32(cd + 20), tOff = be32(cd + 48);
+        uint64_t esLim = 0; memcpy(&esLim, cd + 72, 8); esLim = OSSwapBigToHostInt64(esLim);
+        std::string ident = iOff ? (const char *)(cd + iOff) : "";
+        char line2[768];
+        std::string s2 = (nSp >= 2 && nCode > 0) ? hex8(cd + hOff - 2 * hSize) : "-";
+        std::string c0 = nCode > 0 ? hex8(cd + hOff) : "-";
+        std::string cN = nCode > 0 ? hex8(cd + hOff + (nCode - 1) * hSize) : "-";
+        snprintf(line2, sizeof(line2), "DUMP[%s] CD[t%u] ver=0x%x fl=0x%x hOff=%u nSp=%u nCode=%u cLim=0x%x hSz=%u hT=%u pE=%u idOff=%u tmOff=%u esLim=0x%llx ident=%s s-2=%s c0=%s cN=%s\n",
+                 tag, t, ver, fl, hOff, nSp, nCode, cLim, hSize, hType, pExp, iOff, tOff, (unsigned long long)esLim, ident.c_str(), s2.c_str(), c0.c_str(), cN.c_str());
+        out += line2;
+    }
+}
+
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     static std::atomic<bool> s_running{false};
     if (s_running.exchange(true)) {
@@ -846,6 +902,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                         }
                     };
                     if ([fm fileExistsAtPath:fwSyntax]) {
+                        { std::string d; paxDumpSuperblob(fwSyntax.UTF8String, "丙原簽", d); line(d); }
                         NSString *copyC = [dir stringByAppendingPathComponent:@"libcopy_syntax.dylib"];
                         if (![fm fileExistsAtPath:copyC]) [fm copyItemAtPath:fwSyntax toPath:copyC error:nil];
                         tryLoadRaw(copyC, "G2[丙 良品tmp副本]");
@@ -855,7 +912,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             std::string ddetail;
                             bool dok = paxAdhocSignMachO(copyD.UTF8String, ddetail);
                             line(std::string("G2[丁 簽名器@良品]：") + ddetail);
-                            if (dok) tryLoadRaw(copyD, "G2[丁 良品重簽]");
+                            if (dok) { tryLoadRaw(copyD, "G2[丁 良品重簽]"); { std::string d; paxDumpSuperblob(copyD.UTF8String, "丁產出", d); line(d); } }
                         } else {
                             line("G2[丁]：複製良品失敗");
                         }
@@ -951,6 +1008,22 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     void *h = dlopen(dstP.UTF8String, RTLD_NOW);
                     line(std::string("G4[己 codesign重簽良品]：dlopen ") + (h ? "成功" : std::string("失敗：") + (dlerror() ?: "(null)")));
                 } else line("G4[己]：bundle 內找不到 syntax_codesign.dylib");
+            {
+                NSString *srcP = [bundleDir stringByAppendingPathComponent:@"syntax_codesign.dylib"];
+                NSString *dstP = [dir stringByAppendingPathComponent:@"syntax_ours2.dylib"];
+                [fm removeItemAtPath:dstP error:nil];
+                if ([fm copyItemAtPath:srcP toPath:dstP error:nil]) {
+                    std::string gdetail;
+                    bool gok = paxAdhocSignMachO(dstP.UTF8String, gdetail);
+                    line(std::string("G6[庚 簽名器@codesign良品]：") + gdetail);
+                    { std::string d; paxDumpSuperblob(dstP.UTF8String, "庚產出", d); line(d); }
+                    if (gok) {
+                        void *h = dlopen(dstP.UTF8String, RTLD_NOW);
+                        line(std::string("G6[庚 簽名器重簽codesign良品]：dlopen ") + (h ? "成功" : std::string("失敗：") + (dlerror() ?: "(null)")));
+                    }
+                } else line("G6[庚]：複製 codesign 良品失敗");
+            }
+
             }
             nyxMark("G4 done");
         }
