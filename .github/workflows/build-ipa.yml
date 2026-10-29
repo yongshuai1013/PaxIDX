@@ -119,6 +119,14 @@ jobs:
           ldid -Sci-entitlements.plist build/ipa/Payload/PaxIDX.app/PaxIDX
           echo "main executable entitlements after ldid:"
           ldid -e build/ipa/Payload/PaxIDX.app/PaxIDX | grep -a "can-load-cdhash"
+          printf 'int paxidx_g_answer(void){return 42;}\n' > /tmp/probe_g.c
+          xcrun clang -target arm64-apple-ios15.0 -dynamiclib -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" /tmp/probe_g.c -o build/ipa/Payload/PaxIDX.app/probe_ldid.dylib
+          ldid -S build/ipa/Payload/PaxIDX.app/probe_ldid.dylib
+          SYNTAX_SRC=$(find build/ipa/Payload/PaxIDX.app -name "lib_CompilerSwiftSyntax.dylib" | head -1)
+          echo "G4 syntax src: $SYNTAX_SRC"
+          cp "$SYNTAX_SRC" build/ipa/Payload/PaxIDX.app/syntax_codesign.dylib
+          codesign -s - --force build/ipa/Payload/PaxIDX.app/syntax_codesign.dylib
+          ls -la build/ipa/Payload/PaxIDX.app/probe_ldid.dylib build/ipa/Payload/PaxIDX.app/syntax_codesign.dylib
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
 
       - name: 上傳未簽名 IPA

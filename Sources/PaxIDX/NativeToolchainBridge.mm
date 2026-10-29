@@ -5,6 +5,7 @@
 
 #include <Foundation/Foundation.h>
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <execinfo.h>
 #include <signal.h>
 #include <mach/mach.h>
@@ -865,6 +866,91 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 nyxMark("G done");
             }
         }
+        // ---- G4：真工具簽名判別＋自身 CD execSegFlags 實查 ----
+        {
+            nyxMark("G4 start");
+            auto be32 = [](const uint8_t *p) -> uint32_t {
+                return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+            };
+            {
+                char exeBuf[1024]; uint32_t exeSize = sizeof(exeBuf);
+                std::string info = "G4[自身CD]：";
+                if (_NSGetExecutablePath(exeBuf, &exeSize) != 0) {
+                    info += "取主程式路徑失敗";
+                } else if (FILE *fp = fopen(exeBuf, "rb")) {
+                    fseek(fp, 0, SEEK_END); long fsz = ftell(fp); fseek(fp, 0, SEEK_SET);
+                    std::vector<uint8_t> f((size_t)fsz);
+                    if (fsz <= 0 || fread(f.data(), 1, (size_t)fsz, fp) != (size_t)fsz) info += "讀主程式失敗";
+                    fclose(fp);
+                    if ((long)f.size() == fsz && fsz > 32) {
+                        uint32_t base = 0; bool ok = false;
+                        if (f[0] == 0xcf && f[1] == 0xfa) { base = 0; ok = true; }
+                        else if (be32(f.data()) == 0xcafebabe) {
+                            uint32_t n = be32(f.data() + 4);
+                            for (uint32_t i = 0; i < n; i++) {
+                                const uint8_t *a = f.data() + 8 + i * 20;
+                                if (be32(a) == 0x0100000c) { base = be32(a + 8); ok = true; break; }
+                            }
+                        }
+                        if (!ok) info += "主程式格式未識";
+                        else {
+                            const uint8_t *mh = f.data() + base;
+                            uint32_t ncmds = *(const uint32_t *)(mh + 16);
+                            const uint8_t *p = mh + 32;
+                            bool found = false;
+                            for (uint32_t i = 0; i < ncmds; i++) {
+                                uint32_t cmd = *(const uint32_t *)p;
+                                uint32_t csize = *(const uint32_t *)(p + 4);
+                                if (cmd == 0x1d) {
+                                    const uint8_t *sb = mh + *(const uint32_t *)(p + 8);
+                                    uint32_t cnt = be32(sb + 8);
+                                    for (uint32_t k = 0; k < cnt; k++) {
+                                        if (be32(sb + 12 + k * 8) == 0) {
+                                            const uint8_t *cd = sb + be32(sb + 12 + k * 8 + 4);
+                                            uint32_t ver = be32(cd + 8);
+                                            uint32_t fl = be32(cd + 12);
+                                            uint32_t es = ver >= 0x20100 ? be32(cd + 80) : 0;
+                                            char tmp[220];
+                                            snprintf(tmp, sizeof(tmp), "ver=0x%x flags=0x%x execSegFlags=0x%x CAN_LOAD=%s CAN_EXEC=%s", ver, fl, es, (es & 0x100) ? "有" : "無", (es & 0x200) ? "有" : "無");
+                                            info += tmp; found = true;
+                                        }
+                                    }
+                                }
+                                if (csize == 0) break;
+                                p += csize;
+                            }
+                            if (!found) info += "無 CodeDirectory";
+                        }
+                    }
+                } else info += "開主程式失敗";
+                line(info);
+            }
+            NSString *bundleDir = [[NSBundle mainBundle] bundlePath];
+            {
+                NSString *srcP = [bundleDir stringByAppendingPathComponent:@"probe_ldid.dylib"];
+                NSString *dstP = [dir stringByAppendingPathComponent:@"probe_ldid.dylib"];
+                [fm removeItemAtPath:dstP error:nil];
+                if ([fm copyItemAtPath:srcP toPath:dstP error:nil]) {
+                    void *h = dlopen(dstP.UTF8String, RTLD_NOW);
+                    if (!h) line(std::string("G4[戊 ldid簽探針]：dlopen 失敗：") + (dlerror() ?: "(null)"));
+                    else {
+                        auto fn = (int (*)(void))dlsym(h, "paxidx_g_answer");
+                        line(std::string("G4[戊 ldid簽探針]：dlopen 成功，answer=") + (fn ? std::to_string(fn()) : std::string("dlsym失敗")));
+                    }
+                } else line("G4[戊]：bundle 內找不到 probe_ldid.dylib");
+            }
+            {
+                NSString *srcP = [bundleDir stringByAppendingPathComponent:@"syntax_codesign.dylib"];
+                NSString *dstP = [dir stringByAppendingPathComponent:@"syntax_codesign.dylib"];
+                [fm removeItemAtPath:dstP error:nil];
+                if ([fm copyItemAtPath:srcP toPath:dstP error:nil]) {
+                    void *h = dlopen(dstP.UTF8String, RTLD_NOW);
+                    line(std::string("G4[己 codesign重簽良品]：dlopen ") + (h ? "成功" : std::string("失敗：") + (dlerror() ?: "(null)")));
+                } else line("G4[己]：bundle 內找不到 syntax_codesign.dylib");
+            }
+            nyxMark("G4 done");
+        }
+
         // ---- S：Swift 探針（本案關鍵票） ----
         // Nyxian 0.11.4 內嵌前端為 Swift 6.3.3；其 App 的正式路是
         // SwiftDriver（type=3）＋專案 swiftFlags（-target／-sdk／
