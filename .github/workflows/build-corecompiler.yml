@@ -89,6 +89,19 @@ jobs:
           name: CoreCompiler-6.4-ios15
           path: Nyxian/build/**/CoreCompiler.framework
 
+      - name: 備 res.zip（自編工具鏈的 shims＋clang 21 內建頭＋頂層表）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download 40467437866 --repo yongshuai1013/PaxIDX --name SwiftToolchain-iphoneos-ios15 --dir kit2
+          unzip -o -q kit2/SwiftToolchain.zip "SwiftToolchain/usr/lib/swift/shims/*" "SwiftToolchain/usr/lib/swift/module.modulemap" "SwiftToolchain/usr/lib/clang/21/include/*" -d /tmp/tc
+          rm -rf /tmp/res && mkdir -p /tmp/res/clang
+          cp -R /tmp/tc/SwiftToolchain/usr/lib/swift/shims /tmp/res/shims
+          cp -R /tmp/tc/SwiftToolchain/usr/lib/swift/module.modulemap /tmp/res/module.modulemap
+          cp -R /tmp/tc/SwiftToolchain/usr/lib/clang/21/include /tmp/res/clang/include
+          (cd /tmp/res && zip -r -q "$OLDPWD/res.zip" shims clang module.modulemap)
+          ls -la res.zip
+
       - name: 發布到 release（供 build-ipa 取用）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,3 +114,4 @@ jobs:
               --title "CoreCompiler (self-built Swift 6.4, minos 15.0)" \
               --notes "Nyxian 0.11.4 框架源碼＋自編 6.4／LLVM 21 產物編成，部署目標 15.0 原生。"
           gh release upload corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX CoreCompiler.framework.zip --clobber
+          gh release upload corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX res.zip --clobber
