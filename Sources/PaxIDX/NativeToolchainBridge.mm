@@ -794,8 +794,14 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 // 丁＝同一良品複本經自家簽名器重簽後載。四格矩陣定病根。
                 {
                     nyxMark("G2 start");
-                    NSString *fwSyntax = [[[NSBundle mainBundle] bundlePath]
-                        stringByAppendingPathComponent:@"Frameworks/lib_CompilerSwiftSyntax.dylib"];
+                    NSString *fwDir = [[[NSBundle mainBundle] bundlePath]
+                        stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/Frameworks"];
+                    NSString *fwSyntax = [fwDir stringByAppendingPathComponent:@"lib_CompilerSwiftSyntax.dylib"];
+                    if (![fm fileExistsAtPath:fwSyntax]) {
+                        for (NSString *n in [fm contentsOfDirectoryAtPath:fwDir error:nil] ?: @[]) {
+                            if ([n hasSuffix:@".dylib"]) { fwSyntax = [fwDir stringByAppendingPathComponent:n]; break; }
+                        }
+                    }
                     auto tryLoadRaw = [&](NSString *p, const char *tag) {
                         void *h = dlopen(p.UTF8String, RTLD_NOW);
                         if (!h) {
