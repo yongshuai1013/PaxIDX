@@ -801,9 +801,24 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                         withDestinationPath:swiftForSDK error:nil];
                     line("S：影子 SDK 已建（usr/lib/swift→介面影子集，其餘符號連結回原 SDK）");
                 }
+                // S7：SwiftShims 是靠 resource-dir 頂層 module.modulemap 的 extern
+                // module 宣告登記的（Nyxian 的 BSROOT/swift 有這張表）；SDK 的
+                // usr/lib/swift 只有 shims/ 本體、沒有頂層表，指哪個 SDK 目錄都
+                // 登記不到（S5／S6 實證同錯）。以介面集的 shims 在 tmp 現場組
+                // 一個合規 resource-dir。
+                NSString *resDir = [dir stringByAppendingPathComponent:@"nyxres"];
+                {
+                    [fm removeItemAtPath:resDir error:nil];
+                    [fm createDirectoryAtPath:resDir withIntermediateDirectories:YES attributes:nil error:nil];
+                    [fm copyItemAtPath:[swiftForSDK stringByAppendingPathComponent:@"shims"]
+                        toPath:[resDir stringByAppendingPathComponent:@"shims"] error:nil];
+                    NSString *topMap = @"extern module SwiftShims             \"shims/module.modulemap\"\nextern module _SwiftConcurrencyShims \"shims/module.modulemap\"\nextern module SwiftOverlayShims      \"shims/module.modulemap\"\n";
+                    [topMap writeToFile:[resDir stringByAppendingPathComponent:@"module.modulemap"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                    line("S：合規 resource-dir 已組（shims 複製＋頂層 module.modulemap 已寫）");
+                }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", ssdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S6(前端直打+影子SDK+原始介面集，resource-dir留編譯器端)");
+                    @"-sdk", ssdk, @"-resource-dir", resDir, @"-module-cache-path", scache,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S7(前端直打+影子SDK+合規resource-dir)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -811,9 +826,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S6/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S7/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S6/S2 亦無產物");
+                    line("S7/S2 亦無產物");
                 }
             }
             nyxMark("S done");
