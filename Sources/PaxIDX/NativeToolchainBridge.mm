@@ -14,6 +14,10 @@
 #include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstdio>
+#include <vector>
+#include <CommonCrypto/CommonDigest.h>
+#include <libkern/OSByteOrder.h>
 
 namespace {
 
@@ -387,6 +391,106 @@ static NSString *nyxPackagedSDKPath(void) {
     return [fm fileExistsAtPath:legacy] ? legacy : nil;
 }
 
+
+// ---- App 內 adhoc 簽名器（ldid 形狀的正規 superblob）----
+// lld -adhoc_codesign 產的簽名 iOS 15 dyld 不接受（G 段實證）；
+// 這裡在 lld 已預留的 LC_CODE_SIGNATURE 區間內，原地換上自組的
+// superblob：CodeDirectory(SHA-256)＋空白 requirements＋空白 CMS。
+static bool paxAdhocSignMachO(const char *path, std::string &detail) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { detail = "開啟產物失敗"; return false; }
+    fseek(f, 0, SEEK_END); long fsize = ftell(f); fseek(f, 0, SEEK_SET);
+    if (fsize <= 0) { fclose(f); detail = "產物為空"; return false; }
+    std::vector<uint8_t> img((size_t)fsize);
+    if (fread(img.data(), 1, img.size(), f) != img.size()) { fclose(f); detail = "讀取產物失敗"; return false; }
+    fclose(f);
+    auto rd32 = [&](size_t off) -> uint32_t { uint32_t v; memcpy(&v, img.data() + off, 4); return v; };
+    if (img.size() < 32 || rd32(0) != 0xfeedfacf) { detail = "不是 64 位 Mach-O"; return false; }
+    uint32_t ncmds = rd32(16);
+    uint32_t sizeofcmds = rd32(20);
+    size_t lcOff = 32;
+    size_t lcEnd = 32 + (size_t)sizeofcmds;
+    uint32_t sigOff = 0, sigSize = 0;
+    uint64_t textFileSize = 0;
+    for (uint32_t i = 0; i < ncmds && lcOff + 8 <= lcEnd; i++) {
+        uint32_t cmd = rd32(lcOff), csize = rd32(lcOff + 4);
+        if (csize < 8) break;
+        if (cmd == 0x1d && csize >= 16) { // LC_CODE_SIGNATURE
+            sigOff = rd32(lcOff + 8); sigSize = rd32(lcOff + 12);
+        } else if (cmd == 0x19) { // LC_SEGMENT_64
+            char name[17] = {0}; memcpy(name, img.data() + lcOff + 8, 16);
+            if (strcmp(name, "__TEXT") == 0) { uint64_t fs; memcpy(&fs, img.data() + lcOff + 48, 8); textFileSize = fs; }
+        }
+        lcOff += csize;
+    }
+    if (!sigOff || !sigSize) { detail = "無 LC_CODE_SIGNATURE 預留區（連結須帶 -adhoc_codesign）"; return false; }
+    for (int attempt = 0; attempt < 2; attempt++) {
+        uint32_t pageExp = attempt == 0 ? 12 : 14;
+        uint32_t pageSize = 1u << pageExp;
+        uint32_t codeLimit = sigOff;
+        uint32_t nCode = (codeLimit + pageSize - 1) / pageSize;
+        const uint32_t nSpecial = 2;
+        const uint32_t cdHeader = 88;
+        const uint32_t identLen = 2; // "-\0"
+        const uint32_t teamLen = 1;  // "\0"
+        uint32_t hashOff = cdHeader + identLen + teamLen + nSpecial * 32;
+        uint32_t cdLen = hashOff + nCode * 32;
+        const uint32_t reqLen = 12;
+        const uint32_t cmsLen = 8;
+        auto align16 = [](uint32_t v) { return (v + 15) & ~(uint32_t)15; };
+        uint32_t cdOff = 36; // superblob header 12 + 3 個 index 條目 * 8
+        uint32_t reqOff = align16(cdOff + cdLen);
+        uint32_t cmsOff = align16(reqOff + reqLen);
+        uint32_t total = cmsOff + cmsLen;
+        if (total > sigSize) continue;
+        std::vector<uint8_t> blob(total, 0);
+        auto wr32 = [&](size_t off, uint32_t v) { uint32_t be = OSSwapHostToBigInt32(v); memcpy(blob.data() + off, &be, 4); };
+        auto wr64 = [&](size_t off, uint64_t v) { uint64_t be = OSSwapHostToBigInt64(v); memcpy(blob.data() + off, &be, 8); };
+        wr32(0, 0xfade0cc0); wr32(4, total); wr32(8, 3);
+        wr32(12, 0); wr32(16, cdOff);
+        wr32(20, 2); wr32(24, reqOff);
+        wr32(28, 0x10000); wr32(32, cmsOff);
+        wr32(reqOff, 0xfade0c01); wr32(reqOff + 4, reqLen); wr32(reqOff + 8, 1);
+        wr32(cmsOff, 0xfade0b01); wr32(cmsOff + 4, cmsLen);
+        size_t cd = cdOff;
+        wr32(cd + 0, 0xfade0c02); wr32(cd + 4, cdLen); wr32(cd + 8, 0x20400);
+        wr32(cd + 12, 0x2); // flags = CS_ADHOC
+        wr32(cd + 16, hashOff);
+        wr32(cd + 20, cdHeader);
+        wr32(cd + 24, nSpecial); wr32(cd + 28, nCode);
+        wr32(cd + 32, codeLimit);
+        blob[cd + 36] = 32; blob[cd + 37] = 2; blob[cd + 38] = 0; blob[cd + 39] = (uint8_t)pageExp;
+        wr32(cd + 40, 0);
+        wr32(cd + 44, 0);
+        wr32(cd + 48, cdHeader + identLen);
+        wr32(cd + 52, 0);
+        wr64(cd + 56, 0);
+        wr64(cd + 64, 0);
+        wr64(cd + 72, textFileSize);
+        wr64(cd + 80, 0);
+        memcpy(blob.data() + cd + cdHeader, "-", identLen);
+        size_t specialBase = cd + hashOff - nSpecial * 32;
+        CC_SHA256(blob.data() + reqOff, reqLen, blob.data() + specialBase); // slot -2 = requirements
+        for (uint32_t s = 0; s < nCode; s++) {
+            uint32_t start = s * pageSize;
+            uint32_t len = pageSize < (codeLimit - start) ? pageSize : (codeLimit - start);
+            CC_SHA256(img.data() + start, len, blob.data() + cd + hashOff + s * 32);
+        }
+        FILE *o = fopen(path, "r+b");
+        if (!o) { detail = "重開產物寫入失敗"; return false; }
+        fseek(o, (long)sigOff, SEEK_SET);
+        fwrite(blob.data(), 1, total, o);
+        if (total < sigSize) { std::vector<uint8_t> z(sigSize - total, 0); fwrite(z.data(), 1, z.size(), o); }
+        fclose(o);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "補簽完成（superblob %u／預留 %u 位元組、頁 %u、代碼槽 %u）", total, sigSize, pageSize, nCode);
+        detail = buf;
+        return true;
+    }
+    detail = "簽名預留區太小，兩種頁大小都不夠";
+    return false;
+}
+
 extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     static std::atomic<bool> s_running{false};
     if (s_running.exchange(true)) {
@@ -647,38 +751,46 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 line("產物 testapp 不存在");
             }
             // ---- G：產出代碼真執行——C 編成 dylib、dlopen 後呼叫驗返回值 ----
-            // 兩條線（自家／Nyxian）都從未驗過「產出的代碼能在裝置上跑」，
-            // 這段補上：編譯（B 同款）→連結 dylib（lld 加 -adhoc_codesign）
-            // →dlopen→dlsym→呼叫，返回值對上 42 才算數。
+            // A/B 對照：同一顆 dylib，甲本用 lld 的 -adhoc_codesign（舊路，
+            // 預期被 dyld 拒），乙本在 lld 預留的簽名區換上 App 內簽名器
+            // 自組的 ldid 形狀 superblob——乙本過了，產出補簽路線即成立。
             {
                 nyxMark("G start");
                 NSString *gsrc = [dir stringByAppendingPathComponent:@"probe_g.c"];
                 NSString *gobj = [dir stringByAppendingPathComponent:@"probe_g.o"];
-                NSString *glib = [dir stringByAppendingPathComponent:@"libprobe_g.dylib"];
                 [@"int paxidx_g_answer(void) { return 42; }\n" writeToFile:gsrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
                 runJob(cArgs(gsrc, gobj), "G-C(編譯dylib源)");
-                if ([fm fileExistsAtPath:gobj]) {
-                    runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
-                        @"-syslibroot", sdk, @"-dylib", @"-adhoc_codesign", @"-o", glib, gobj, @"-lSystem"], "G-L(連結dylib)");
-                } else {
-                    line("G：probe_g.o 不存在，跳過連結");
-                }
-                if ([fm fileExistsAtPath:glib]) {
-                    void *h = dlopen(glib.UTF8String, RTLD_NOW);
+                auto tryLoad = [&](NSString *libPath, const char *tag) {
+                    if (![fm fileExistsAtPath:libPath]) { line(std::string(tag) + "：dylib 不存在"); return; }
+                    void *h = dlopen(libPath.UTF8String, RTLD_NOW);
                     if (!h) {
-                        line(std::string("G：dlopen 產出 dylib 失敗：") + (dlerror() ?: "(null)"));
+                        line(std::string(tag) + "：dlopen 失敗：" + (dlerror() ?: "(null)"));
+                        return;
+                    }
+                    typedef int (*AnswerFn)(void);
+                    AnswerFn fn = (AnswerFn)dlsym(h, "paxidx_g_answer");
+                    if (!fn) { line(std::string(tag) + "：dlsym 找不到 paxidx_g_answer"); return; }
+                    int v = fn();
+                    line(std::string(tag) + "：產出函數已執行，返回值 " + std::to_string(v) + (v == 42 ? "（正確）" : "（不符預期）"));
+                };
+                if ([fm fileExistsAtPath:gobj]) {
+                    NSString *glibA = [dir stringByAppendingPathComponent:@"libprobe_g_lld.dylib"];
+                    runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                        @"-syslibroot", sdk, @"-dylib", @"-adhoc_codesign", @"-o", glibA, gobj, @"-lSystem"], "G-L(甲·lld簽名)");
+                    tryLoad(glibA, "G[甲 lld adhoc]");
+                    NSString *glibB = [dir stringByAppendingPathComponent:@"libprobe_g_own.dylib"];
+                    runLinkJob(@[@"-arch", @"arm64", @"-platform_version", @"ios", @"15.0", @"18.5",
+                        @"-syslibroot", sdk, @"-dylib", @"-adhoc_codesign", @"-o", glibB, gobj, @"-lSystem"], "G-L(乙·待補簽)");
+                    if ([fm fileExistsAtPath:glibB]) {
+                        std::string sdetail;
+                        bool sok = paxAdhocSignMachO(glibB.UTF8String, sdetail);
+                        line(std::string("G[乙 自家簽名器]：") + sdetail);
+                        if (sok) tryLoad(glibB, "G[乙 自家補簽]");
                     } else {
-                        typedef int (*AnswerFn)(void);
-                        AnswerFn fn = (AnswerFn)dlsym(h, "paxidx_g_answer");
-                        if (!fn) {
-                            line("G：dlsym 找不到 paxidx_g_answer");
-                        } else {
-                            int v = fn();
-                            line(std::string("G：產出函數已執行，返回值 ") + std::to_string(v) + (v == 42 ? "（正確）" : "（不符預期）"));
-                        }
+                        line("G[乙]：dylib 不存在，跳過補簽");
                     }
                 } else {
-                    line("G：libprobe_g.dylib 不存在");
+                    line("G：probe_g.o 不存在，跳過連結");
                 }
                 nyxMark("G done");
             }
