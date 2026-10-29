@@ -115,6 +115,10 @@ jobs:
             gh release view "$RELTAG" --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create "$RELTAG" --repo yongshuai1013/PaxIDX --title "PaxSDK ($RELTAG)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
             gh release upload "$RELTAG" "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
+          brew install ldid 2>/dev/null || true
+          ldid -Sci-entitlements.plist build/ipa/Payload/PaxIDX.app/PaxIDX
+          echo "main executable entitlements after ldid:"
+          ldid -e build/ipa/Payload/PaxIDX.app/PaxIDX | grep -a "can-load-cdhash"
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
 
       - name: 上傳未簽名 IPA

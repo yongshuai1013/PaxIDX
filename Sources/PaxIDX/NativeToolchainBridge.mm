@@ -417,6 +417,13 @@ static void paxReportJitState(const char *tag, std::string &out) {
 // lld -adhoc_codesign 產的簽名 iOS 15 dyld 不接受（G 段實證）；
 // 這裡在 lld 已預留的 LC_CODE_SIGNATURE 區間內，原地換上自組的
 // superblob：CodeDirectory(SHA-256)＋空白 requirements＋空白 CMS。
+static void paxReportEntitlements(std::string &out) {
+    static std::vector<uint8_t> buf(32768, 0);
+    int rc = csops(getpid(), 7, buf.data(), buf.size());
+    bool has = false;
+    if (rc == 0) { std::string s((const char *)buf.data(), buf.size()); has = s.find("can-load-cdhash") != std::string::npos; }
+    out += std::string("PaxIDX entitlements check: csops rc=") + std::to_string(rc) + " can-load-cdhash=" + (has ? "YES" : "NO") + "\n";
+}
 static bool paxAdhocSignMachO(const char *path, std::string &detail) {
     FILE *f = fopen(path, "rb");
     if (!f) { detail = "開啟產物失敗"; return false; }
@@ -778,6 +785,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
             {
                 nyxMark("G start");
                 paxReportJitState("G 段執行當下", report);
+                paxReportEntitlements(report);
                 NSString *gsrc = [dir stringByAppendingPathComponent:@"probe_g.c"];
                 NSString *gobj = [dir stringByAppendingPathComponent:@"probe_g.o"];
                 [@"int paxidx_g_answer(void) { return 42; }\n" writeToFile:gsrc atomically:YES encoding:NSUTF8StringEncoding error:nil];
