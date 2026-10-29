@@ -802,8 +802,8 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     line("S：影子 SDK 已建（usr/lib/swift→介面影子集，其餘符號連結回原 SDK）");
                 }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", ssdk, @"-resource-dir", swiftForSDK, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S5(前端直打+影子SDK+原始介面集)");
+                    @"-sdk", ssdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S6(前端直打+影子SDK+原始介面集，resource-dir留編譯器端)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -811,9 +811,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S5/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S6/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S5/S2 亦無產物");
+                    line("S6/S2 亦無產物");
                 }
             }
             nyxMark("S done");
