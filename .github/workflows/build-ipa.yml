@@ -86,6 +86,11 @@ jobs:
             rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
             mkdir -p /tmp/paxsdk/iPhoneOS.sdk
             cp -R "$SDKROOT2/." /tmp/paxsdk/iPhoneOS.sdk/
+            echo "改寫 SDK 介面版本戳：Xcode 26 SDK 介面由 Apple Swift 6.3.2 產出、OSS 6.4 前端會以「SDK 不受支援」拒收；戳改成自編前端版本（介面格式同為 1.0）"
+            find /tmp/paxsdk/iPhoneOS.sdk -name '*.swiftinterface' -type f | while read -r f; do
+              sed -i '' -E 's|^// swift-compiler-version: .*|// swift-compiler-version: Apple Swift version 6.4 (swift-6.4-RELEASE)|; s|-interface-compiler-version [0-9]+\.[0-9]+(\.[0-9]+)*|-interface-compiler-version 6.4|g' "$f"
+            done
+            grep -m1 'swift-compiler-version' /tmp/paxsdk/iPhoneOS.sdk/usr/lib/swift/Swift.swiftmodule/arm64e-apple-ios.swiftinterface || true
             gh release download corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX --pattern "res.zip" --dir /tmp/ccres
             unzip -o -q /tmp/ccres/res.zip -d /tmp/paxsdk/res
             ls /tmp/paxsdk/res

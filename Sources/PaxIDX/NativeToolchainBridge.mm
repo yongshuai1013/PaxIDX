@@ -886,7 +886,8 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 NSString *paxSDKRoot = [docsDir stringByAppendingPathComponent:@"PaxSDK"];
                 NSString *bundledSDK = [paxSDKRoot stringByAppendingPathComponent:@"iPhoneOS.sdk"];
                 NSString *bundledRes = [paxSDKRoot stringByAppendingPathComponent:@"res"];
-                BOOL bundledOK = [fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface"]]
+                BOOL bundledOK = ([fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface"]]
+                               || [fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64e-apple-ios.swiftinterface"]])
                                && [fm fileExistsAtPath:[bundledRes stringByAppendingPathComponent:@"module.modulemap"]]
                                && [fm fileExistsAtPath:[bundledRes stringByAppendingPathComponent:@"clang/include/stddef.h"]];
                 if (bundledOK) {
