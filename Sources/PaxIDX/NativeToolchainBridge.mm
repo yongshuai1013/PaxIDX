@@ -423,9 +423,16 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
     }
     NSString *sdk = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/SDK/iPhoneOS.sdk"];
     if (![fm fileExistsAtPath:sdk]) {
-        line("SDK 未安裝（Documents/SDK/iPhoneOS.sdk 不存在），先到設定頁下載 SDK");
-        copyDiag(report.c_str(), buffer, capacity);
-        return 1;
+        // 打包 SDK 已解壓在 Documents/PaxSDK 就直接用它（新鏈不依賴舊下載路徑）
+        NSString *bundled = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/PaxSDK/iPhoneOS.sdk"];
+        if ([fm fileExistsAtPath:bundled]) {
+            sdk = bundled;
+            line("S：舊路徑 SDK 不在，改用打包 SDK（Documents/PaxSDK）");
+        } else {
+            line("SDK 未安裝（Documents/SDK 與 Documents/PaxSDK 皆不存在）");
+            copyDiag(report.c_str(), buffer, capacity);
+            return 1;
+        }
     }
     NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"nyxtest"];
     [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
