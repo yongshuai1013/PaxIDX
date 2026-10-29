@@ -648,7 +648,29 @@ static bool paxGraftSignMachO(const char *path, const char *donorPath, std::stri
     uint32_t oAlt = oReq + (uint32_t)donorReq.size();
     uint32_t oCMS = oAlt + cdLen;
     uint32_t total = oCMS + (uint32_t)donorCMS.size();
-    if (total > sigSize) { detail = "graft superblob 放不進預留區"; return false; }
+    bool grow = total > sigSize;
+    if (grow) {
+        size_t sigSizePos = 0, leFSPos = 0, leVSPos = 0;
+        uint64_t leFO = 0, leFS = 0, leVS = 0;
+        uint32_t ncmds2; memcpy(&ncmds2, img.data() + 16, 4);
+        size_t lc2 = 32;
+        for (uint32_t i = 0; i < ncmds2 && lc2 + 8 <= img.size(); i++) {
+            uint32_t cmd, csize; memcpy(&cmd, img.data() + lc2, 4); memcpy(&csize, img.data() + lc2 + 4, 4);
+            if (csize < 8) break;
+            if (cmd == 0x1d) sigSizePos = lc2 + 12;
+            else if (cmd == 0x19) { char nm[17] = {0}; memcpy(nm, img.data() + lc2 + 8, 16); if (strcmp(nm, "__LINKEDIT") == 0) { leVSPos = lc2 + 32; leFSPos = lc2 + 48; memcpy(&leFO, img.data() + lc2 + 40, 8); memcpy(&leFS, img.data() + lc2 + 48, 8); memcpy(&leVS, img.data() + lc2 + 32, 8); } }
+            lc2 += csize;
+        }
+        if (!sigSizePos || !leFSPos || (uint64_t)sigOff + sigSize != leFO + leFS || (uint64_t)sigOff + sigSize != img.size()) {
+            detail = "graft 放不進且簽名區不在檔尾，無法擴區"; return false;
+        }
+        uint32_t growBy = total - sigSize;
+        uint32_t ns = total; memcpy(img.data() + sigSizePos, &ns, 4);
+        uint64_t nfs = leFS + growBy; memcpy(img.data() + leFSPos, &nfs, 8);
+        uint64_t nvs = leVS; uint64_t need = (nfs + 4095) & ~(uint64_t)4095; if (nvs < need) nvs = need;
+        memcpy(img.data() + leVSPos, &nvs, 8);
+        img.resize((size_t)sigOff + total, 0);
+    }
     std::vector<uint8_t> blob(total, 0);
     auto wr32 = [&](size_t o, uint32_t v) { uint32_t b = OSSwapHostToBigInt32(v); memcpy(blob.data() + o, &b, 4); };
     auto wr64 = [&](size_t o, uint64_t v) { uint64_t b = OSSwapHostToBigInt64(v); memcpy(blob.data() + o, &b, 8); };
@@ -679,14 +701,15 @@ static bool paxGraftSignMachO(const char *path, const char *donorPath, std::stri
         uint32_t len = pageSize < (codeLimit - start) ? pageSize : (codeLimit - start);
         CC_SHA256(img.data() + start, len, blob.data() + cd + hashOff + s * 32);
     }
-    FILE *o = fopen(path, "r+b");
-    if (!o) { detail = "重開產物寫入失敗"; return false; }
-    fseek(o, (long)sigOff, SEEK_SET);
-    fwrite(blob.data(), 1, total, o);
-    if (total < sigSize) { std::vector<uint8_t> z(sigSize - total, 0); fwrite(z.data(), 1, z.size(), o); }
+    memcpy(img.data() + sigOff, blob.data(), total);
+    if (!grow && total < sigSize) memset(img.data() + sigOff + total, 0, sigSize - total);
+    FILE *o = fopen(path, "wb");
+    if (!o) { detail = "重寫產物失敗"; return false; }
+    fwrite(img.data(), 1, img.size(), o);
     fclose(o);
-    char buf[220];
-    snprintf(buf, sizeof(buf), "graft 補簽完成（superblob %u／預留 %u、alt ident=%s）", total, sigSize, ident.c_str());
+    char buf[260];
+    if (grow) snprintf(buf, sizeof(buf), "graft 補簽完成（已擴區，superblob %u、alt ident=%s）", total, ident.c_str());
+    else snprintf(buf, sizeof(buf), "graft 補簽完成（superblob %u／預留 %u、alt ident=%s）", total, sigSize, ident.c_str());
     detail = buf;
     return true;
 }
@@ -988,6 +1011,19 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                         bool sok = paxAdhocSignMachO(glibB.UTF8String, sdetail);
                         line(std::string("G[乙 自家簽名器]：") + sdetail);
                         if (sok) tryLoad(glibB, "G[乙 自家補簽]");
+                    {
+                        NSString *donorP = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/Frameworks/lib_CompilerSwiftSyntax.dylib"];
+                        NSString *glibG = [dir stringByAppendingPathComponent:@"libprobe_g_graft.dylib"];
+                        [fm removeItemAtPath:glibG error:nil];
+                        if ([fm copyItemAtPath:glibA toPath:glibG error:nil]) {
+                            std::string kdetail;
+                            bool kok = paxGraftSignMachO(glibG.UTF8String, donorP.UTF8String, kdetail);
+                            line(std::string("G8[癸 graft@自產probe]：") + kdetail);
+                            if (kok) tryLoad(glibG, "G8[癸 graft自產]");
+                        } else {
+                            line("G8[癸]：複製 lld 產出失敗");
+                        }
+                    }
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
                     }
