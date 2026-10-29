@@ -88,6 +88,23 @@ jobs:
           ls "$FW/Frameworks" | head -20
           ls "$FW/Frameworks" | wc -l
 
+      - name: 補齊框架內嵌支援庫（專案複製清單漏掉的新世代庫）
+        run: |
+          FW=Nyxian/build/Release-iphoneos/CoreCompiler.framework
+          mkdir -p "$FW/Frameworks"
+          for f in Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs/*.dylib; do
+            base=$(basename "$f")
+            if [ ! -f "$FW/Frameworks/$base" ]; then
+              echo "補入 $base"
+              cp "$f" "$FW/Frameworks/$base"
+            fi
+          done
+          otool -L "$FW/CoreCompiler" | grep -o "lib_CompilerSwift[A-Za-z]*\.dylib" | sort -u | while read -r lib; do
+            test -f "$FW/Frameworks/$lib" || { echo "缺庫：$lib"; exit 1; }
+            echo "OK $lib"
+          done
+          echo "Frameworks 內嵌庫數：$(ls "$FW/Frameworks" | wc -l)"
+
       - name: 上傳 framework artifact
         uses: actions/upload-artifact@v4
         with:
