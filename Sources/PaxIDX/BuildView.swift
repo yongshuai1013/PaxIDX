@@ -66,15 +66,7 @@ struct BuildView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("SDK 版本", selection: $selectedSDKFolder) {
-                            ForEach(installedSDKs) { sdk in
-                                Text("iOS \(sdk.version)").tag(sdk.folderName)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: selectedSDKFolder) { v in
-                            ProjectFiles.updateSDKFolder(name: project.name, folder: v)
-                        }
+                        Text("iOS \((installedSDKs.first { $0.folderName == selectedSDKFolder } ?? installedSDKs.first!).version)")
                     }
                 }
                 Section(header: Text("源文件")) {
