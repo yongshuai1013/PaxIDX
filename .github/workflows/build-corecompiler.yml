@@ -1,0 +1,77 @@
+name: Build CoreCompiler (self-built 6.4 libs, iOS 15)
+
+# 以 Nyxian 0.11.4 的 CoreCompiler 框架源碼，對「我們自編的」Swift 6.4／
+# LLVM 21 產物（build-llvm-nyxian run 40467437866 的 LLVM-xcframework-ios15
+# artifact：merged llvm.a＋CoreCompilerSupportLibs）編 framework，
+# 部署目標 15.0 原生（不改戳記）。產出的 framework 上 release
+# corecompiler-6.4-ios15 供 build-ipa 的 nyx_test 步驟取用。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: 檢出 Nyxian 0.11.4（框架源碼）
+        uses: actions/checkout@v4
+        with:
+          repository: emexlab/Nyxian
+          ref: 0.11.4
+          path: Nyxian
+          fetch-depth: 1
+
+      - name: 下載自編 6.4 套件（本倉庫 Actions artifact）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run download 40467437866 --repo yongshuai1013/PaxIDX --name LLVM-xcframework-ios15 --dir kit
+          ls -la kit
+
+      - name: 擺放套件到框架預期位置
+        run: |
+          mkdir -p Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs
+          tar -xJf kit/LLVM.xcframework.tar.xz -C Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs
+          tar -xJf kit/CoreCompilerSupportLibs.tar.xz -C Nyxian/Frameworks/CoreCompiler
+          ls Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs | head -20
+          ls Nyxian/Frameworks/CoreCompiler/CoreCompilerSupportLibs/LLVM.xcframework
+
+      - name: 編 CoreCompiler target（部署目標 15.0）
+        working-directory: Nyxian
+        run: |
+          xcodebuild -project Nyxian.xcodeproj -target CoreCompiler \
+            -configuration Release -sdk iphoneos \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            SYMROOT="$PWD/build" build
+
+      - name: 驗 framework
+        run: |
+          FW=$(find Nyxian/build -name "CoreCompiler.framework" -type d | head -1)
+          echo "framework: $FW"
+          ls -la "$FW"
+          otool -l "$FW/CoreCompiler" | grep -A2 LC_BUILD_VERSION | head -6
+          ls "$FW/Frameworks" 2>/dev/null | head -20
+
+      - name: 上傳 framework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoreCompiler-6.4-ios15
+          path: Nyxian/build/**/CoreCompiler.framework
+
+      - name: 發布到 release（供 build-ipa 取用）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FW=$(find Nyxian/build -name "CoreCompiler.framework" -type d | head -1)
+          ditto -c -k --keepParent "$FW" CoreCompiler.framework.zip
+          ls -la CoreCompiler.framework.zip
+          gh release view corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || \
+            gh release create corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX \
+              --title "CoreCompiler (self-built Swift 6.4, minos 15.0)" \
+              --notes "Nyxian 0.11.4 框架源碼＋自編 6.4／LLVM 21 產物編成，部署目標 15.0 原生。"
+          gh release upload corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX CoreCompiler.framework.zip --clobber
