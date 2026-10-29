@@ -19,6 +19,9 @@ on:
       - 'project.yml'
       - '.github/workflows/build-ipa.yml'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
