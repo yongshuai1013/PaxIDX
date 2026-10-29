@@ -57,6 +57,8 @@ jobs:
         run: xcodegen generate
 
       - name: 編譯並打包（不簽名）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           xcodebuild archive \
             -scheme PaxIDX \
@@ -70,31 +72,12 @@ jobs:
           mkdir -p build/ipa/Payload/PaxIDX.app/Frameworks
           cp Vendor/NativeToolchain/libPaxIDXNativeToolchain.dylib build/ipa/Payload/PaxIDX.app/Frameworks/
           if [ "${{ inputs.nyx_test }}" = "true" ]; then
-            echo "nyx_test：下載 Nyxian 0.11.4、改戳記 CoreCompiler 後內嵌"
-            curl -sSL -o /tmp/nyxian.ipa "https://github.com/emexlab/Nyxian/releases/download/0.11.4/Nyxian.ipa"
-            mkdir -p /tmp/nyx && unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Frameworks/CoreCompiler.framework/*" -d /tmp/nyx
-            FWDIR=/tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework python3 - <<'PYEOF'
-          import os, struct, glob
-          fw = os.environ['FWDIR']
-          targets = [os.path.join(fw, 'CoreCompiler')] + sorted(glob.glob(fw + '/Frameworks/*.dylib'))
-          want = 15 << 16
-          for path in targets:
-              d = bytearray(open(path, 'rb').read())
-              n = struct.unpack_from('<I', d, 16)[0]
-              p = 32; hit = 0
-              for _ in range(n):
-                  cmd, size = struct.unpack_from('<II', d, p)
-                  if cmd == 0x32:
-                      struct.pack_into('<I', d, p + 12, want); hit += 1
-                  p += size
-              assert hit == 1, (path, hit)
-              open(path, 'wb').write(d)
-              print('patched minos->15.0:', os.path.basename(path))
-          PYEOF
-            cp -R /tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
+            echo "nyx_test：下載自編 CoreCompiler（release corecompiler-6.4-ios15，minos 15 原生、免改戳記）"
+            gh release download corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX --pattern "CoreCompiler.framework.zip" --dir /tmp/ccfw
+            unzip -o -q /tmp/ccfw/CoreCompiler.framework.zip -d /tmp/ccfw/x
+            ls -la /tmp/ccfw/x/CoreCompiler.framework/
+            cp -R /tmp/ccfw/x/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
             echo "nyx_test：組 PaxSDK.zip（完整原始 SDK＋BSROOT res，他們的打包法；S10 用）"
-            unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Shared/swift.zip" -d /tmp/nyx
-            unzip -o -q /tmp/nyx/Payload/Nyxian.app/Shared/swift.zip "swift/shims/*" "swift/clang/*" "swift/module.modulemap" -d /tmp/nyxres
             # SDK 換 Xcode 26 原生 iphoneos SDK（CI 機 Xcode 26.6 的 26.5 世代，
             # 與自編 6.4 前端同世代）；部署目標 15 由探針 -target 指定。
             SDKROOT2=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -103,7 +86,9 @@ jobs:
             rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
             mkdir -p /tmp/paxsdk/iPhoneOS.sdk
             cp -R "$SDKROOT2/." /tmp/paxsdk/iPhoneOS.sdk/
-            cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap /tmp/paxsdk/res/
+            gh release download corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX --pattern "res.zip" --dir /tmp/ccres
+            unzip -o -q /tmp/ccres/res.zip -d /tmp/paxsdk/res
+            ls /tmp/paxsdk/res
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
             (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
