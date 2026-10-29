@@ -60,6 +60,7 @@ enum CoreCompilerService {
         if isObjC {
             let rd = clangResourceDir(sdk: sdk, res: res)
             args += ["-F" + sdk.appendingPathComponent("System/Library/Frameworks").path,
+                     "-F" + sdk.appendingPathComponent("System/Library/SubFrameworks").path,
                      "-resource-dir", rd,
                      "-internal-isystem", rd + "/include",
                      "-D__GNUC__=4", "-D__GNUC_MINOR__=2", "-D__GNUC_PATCHLEVEL__=1",
@@ -92,6 +93,7 @@ enum CoreCompilerService {
         args += objects.map { $0.path }
         if hasObjC || hasSwift {
             args += ["-F" + sdk.appendingPathComponent("System/Library/Frameworks").path,
+                     "-F" + sdk.appendingPathComponent("System/Library/SubFrameworks").path,
                      "-framework", "Foundation", "-framework", "UIKit",
                      "-framework", "CoreGraphics", "-lobjc"]
         }
