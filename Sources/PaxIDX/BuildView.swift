@@ -264,6 +264,26 @@ struct BuildView: View {
                 }.joined()
                 let cacheDir = buildDir.appendingPathComponent("ModuleCache", isDirectory: true)
                 try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+                if swiftFiles.isEmpty {
+                    let hasObjC = sources.contains {
+                        let e = ($0 as NSString).pathExtension.lowercased()
+                        return e == "m" || e == "mm"
+                    }
+                    let hasCpp = sources.contains {
+                        let e = ($0 as NSString).pathExtension.lowercased()
+                        return e == "cpp" || e == "cc" || e == "mm"
+                    }
+                    log("以 clang driver 組裝編譯＋連結…")
+                    let exeURL = buildDir.appendingPathComponent(project.name)
+                    let r = CoreCompilerService.buildWithDriver(
+                        sources: sources.map { sourcesDir.appendingPathComponent($0) },
+                        output: exeURL, buildDir: buildDir, sdk: sdk.url, res: res,
+                        hasObjC: hasObjC, hasCpp: hasCpp)
+                    if !r.report.isEmpty { log(r.report) }
+                    if r.rc != 0 { return "driver 編譯失敗（rc=\(r.rc)）" }
+                    log("編譯完成：\(exeURL.path)")
+                    return nil
+                }
                 var objects: [URL] = []
                 var hasObjC = false, hasSwift = false, hasCpp = false
                 for src in sources {

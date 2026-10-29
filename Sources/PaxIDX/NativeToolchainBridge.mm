@@ -355,6 +355,12 @@ typedef uint8_t (*CCDiagnosticGetLevelFn)(CCDiagnosticRef2);
 typedef CFStringRef (*CCDiagnosticGetMessageFn)(CCDiagnosticRef2);
 typedef CFURLRef (*CCJobGetOutputFileURLFn)(CCJobRef2);
 typedef CCJobRef2 (*CCJobCreateFn)(CFAllocatorRef, uint8_t, CFArrayRef);
+typedef struct __CCDriver *CCDriverRef2;
+typedef CFStringRef (*CCOutputPathCallbackFn)(const char *baseInput, bool *skip, void *context);
+typedef CCDriverRef2 (*CCDriverCreateFn)(CFAllocatorRef, CFArrayRef, uint8_t);
+typedef CFArrayRef (*CCDriverCreateJobsFn)(CCDriverRef2);
+typedef void (*CCDriverSetOutputPathCallbackFn)(CCDriverRef2, CCOutputPathCallbackFn, void *);
+typedef CFArrayRef (*CCJobGetArgumentsFn)(CCJobRef2);
 typedef CFURLRef (*CCDriverCopySysrootURLFn)(CCDriverRef2);
 typedef CFArrayRef (*CCJobCreateArgumentsFn)(CFAllocatorRef, CCJobRef2);
 typedef CFArrayRef (*CCJobGetBaseArgumentsFn)(CCJobRef2);
@@ -955,6 +961,11 @@ static CCJobCreateFn paxCCJobCreate = NULL;
 static CCJobExecuteJobFn paxCCJobExecute = NULL;
 static CCDiagnosticGetLevelFn paxCCDiagLevel = NULL;
 static CCDiagnosticGetMessageFn paxCCDiagMessage = NULL;
+static CCDriverCreateFn paxCCDriverCreate = NULL;
+static CCDriverCreateJobsFn paxCCDriverCreateJobs = NULL;
+static CCDriverSetOutputPathCallbackFn paxCCDriverSetCallback = NULL;
+static CCJobGetTypeFn paxCCJobGetType = NULL;
+static CCJobGetArgumentsFn paxCCJobGetArguments = NULL;
 static int paxCCState = 0; // 0 未試、1 可用、2 未內嵌、3 載入失敗
 
 static int paxCCEnsureLoaded(void) {
@@ -970,6 +981,11 @@ static int paxCCEnsureLoaded(void) {
     paxCCJobExecute = (CCJobExecuteJobFn)dlsym(h, "CCJobExecuteJob");
     paxCCDiagLevel = (CCDiagnosticGetLevelFn)dlsym(h, "CCDiagnosticGetLevel");
     paxCCDiagMessage = (CCDiagnosticGetMessageFn)dlsym(h, "CCDiagnosticGetMessage");
+    paxCCDriverCreate = (CCDriverCreateFn)dlsym(h, "CCDriverCreate");
+    paxCCDriverCreateJobs = (CCDriverCreateJobsFn)dlsym(h, "CCDriverCreateJobs");
+    paxCCDriverSetCallback = (CCDriverSetOutputPathCallbackFn)dlsym(h, "CCDriverSetOutputPathCallback");
+    paxCCJobGetType = (CCJobGetTypeFn)dlsym(h, "CCJobGetType");
+    paxCCJobGetArguments = (CCJobGetArgumentsFn)dlsym(h, "CCJobGetArguments");
     paxCCState = (paxCCJobCreate && paxCCJobExecute) ? 1 : 3;
     return paxCCState;
 }
@@ -1025,3 +1041,114 @@ extern "C" int paxidx_cc_job(int type, int argc, const char * const *argv,
     copyDiag(out.c_str(), report, capacity);
     return success ? 0 : 1;
 }
+
+// MARK: - clang driver 組裝路（CCDriver）
+
+// .o 導向 buildDir：回傳字串按 Create 規則（框架端用完 CFRelease）
+static CFStringRef paxDriverOutputPath(const char *baseInput, bool *skip, void *context) {
+    (void)skip;
+    if (!baseInput || !context) return NULL;
+    NSString *input = [NSString stringWithUTF8String:baseInput];
+    NSString *stem = [[input lastPathComponent] stringByDeletingPathExtension];
+    NSString *dir = [NSString stringWithUTF8String:(const char *)context];
+    NSString *out = [dir stringByAppendingPathComponent:[stem stringByAppendingPathExtension:@"o"]];
+    return CFStringCreateWithCString(NULL, [out UTF8String], kCFStringEncodingUTF8);
+}
+
+// 執行單個已存在的 CCJob，診斷與 stderr 併入 out（做法照 paxidx_cc_job）
+static Boolean paxRunOneJob(CCJobRef2 job, std::string &out) {
+    static const char *kLv[] = {"note", "remark", "warning", "error", "fatal", "unknown"};
+    NSString *errFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"paxdrv_stderr.txt"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:errFile error:nil];
+    fflush(stdout); fflush(stderr);
+    int savedOut = dup(1), savedErr = dup(2);
+    FILE *errFp = fopen([errFile UTF8String], "w");
+    if (errFp) { dup2(fileno(errFp), 1); dup2(fileno(errFp), 2); }
+    CFArrayRef diags = NULL;
+    CFStringRef mainSrc = NULL;
+    Boolean success = paxCCJobExecute(job, &diags, &mainSrc);
+    if (errFp) {
+        fflush(stdout); fflush(stderr);
+        dup2(savedOut, 1); dup2(savedErr, 2);
+        fclose(errFp);
+    }
+    if (savedOut >= 0) close(savedOut);
+    if (savedErr >= 0) close(savedErr);
+    if (diags && paxCCDiagLevel && paxCCDiagMessage) {
+        CFIndex nd = CFArrayGetCount(diags);
+        for (CFIndex d = 0; d < nd; d++) {
+            CCDiagnosticRef2 dg = (CCDiagnosticRef2)CFArrayGetValueAtIndex(diags, d);
+            uint8_t lv = paxCCDiagLevel(dg);
+            CFStringRef msg = paxCCDiagMessage(dg);
+            std::string m = msg ? ([(__bridge NSString *)msg UTF8String] ?: "") : "";
+            out += std::string("diag[") + kLv[lv <= 5 ? lv : 5] + "] " + m + "\n";
+        }
+    }
+    NSString *cap = [NSString stringWithContentsOfFile:errFile encoding:NSUTF8StringEncoding error:nil];
+    if (cap.length > 0) {
+        if (cap.length > 6000) cap = [cap substringToIndex:6000];
+        out += [cap UTF8String];
+    }
+    if (diags) CFRelease(diags);
+    if (mainSrc) CFRelease(mainSrc);
+    return success;
+}
+
+extern "C" int paxidx_cc_driver(const char *buildDir, int argc, const char * const *argv,
+                                char *report, size_t capacity) {
+    int st = paxCCEnsureLoaded();
+    if (st == 2) { copyDiag("未內嵌 CoreCompiler.framework", report, capacity); return 2; }
+    if (st != 1) { copyDiag("CoreCompiler 載入失敗", report, capacity); return 1; }
+    if (!paxCCDriverCreate || !paxCCDriverCreateJobs) {
+        copyDiag("框架缺 CCDriver 符號", report, capacity); return 1;
+    }
+    NSMutableArray *args = [NSMutableArray arrayWithCapacity:(NSUInteger)argc];
+    for (int i = 0; i < argc; i++) [args addObject:[NSString stringWithUTF8String:argv[i]]];
+    CCDriverRef2 driver = paxCCDriverCreate(nyxZeroAllocator(), (__bridge CFArrayRef)args, 0);
+    if (!driver) { copyDiag("CCDriverCreate 回傳空", report, capacity); return 1; }
+    if (paxCCDriverSetCallback) {
+        paxCCDriverSetCallback(driver, paxDriverOutputPath, (void *)buildDir);
+    }
+    CFArrayRef jobs = paxCCDriverCreateJobs(driver);
+    if (!jobs) {
+        CFRelease(driver);
+        copyDiag("CCDriverCreateJobs 回傳空（driver 展開失敗）", report, capacity);
+        return 1;
+    }
+    std::string out;
+    CFIndex n = CFArrayGetCount(jobs);
+    out += "driver 展開 " + std::to_string((long)n) + " 個 job\n";
+    int rc = 0;
+    for (CFIndex i = 0; i < n; i++) {
+        CCJobRef2 job = (CCJobRef2)CFArrayGetValueAtIndex(jobs, i);
+        uint8_t jt = paxCCJobGetType ? paxCCJobGetType(job) : 255;
+        out += "job[" + std::to_string((long)i) + "] type=" + std::to_string(jt) + "\n";
+        std::string one;
+        Boolean ok = paxRunOneJob(job, one);
+        out += one;
+        if (!ok) {
+            out += "job[" + std::to_string((long)i) + "] 失敗，其展開參數：\n";
+            if (paxCCJobGetArguments) {
+                CFArrayRef ja = paxCCJobGetArguments(job);
+                if (ja) {
+                    CFIndex nj = CFArrayGetCount(ja);
+                    for (CFIndex j = 0; j < nj; j++) {
+                        CFStringRef s = (CFStringRef)CFArrayGetValueAtIndex(ja, j);
+                        const char *cs = s ? [(__bridge NSString *)s UTF8String] : NULL;
+                        out += "  ";
+                        out += cs ? cs : "?";
+                        out += "\n";
+                    }
+                }
+            }
+            rc = 1;
+            break;
+        }
+    }
+    CFRelease(jobs);
+    CFRelease(driver);
+    copyDiag(out.c_str(), report, capacity);
+    return rc;
+}
+

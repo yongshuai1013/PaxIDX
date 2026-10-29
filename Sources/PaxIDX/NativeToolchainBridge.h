@@ -36,6 +36,12 @@ int paxidx_ld_link(int argc, const char * const *argv,
 int paxidx_cc_job(int type, int argc, const char * const *argv,
                   char *report, size_t capacity);
 
+/// clang driver 組裝路（Nyxian 同款）：driver 旗標（不含程式名，框架自行
+/// 補 "clang" 與 "-fuse-ld=lld"）交 CCDriver 展開成 CCJob 逐個執行，
+/// .o 經 output callback 導向 buildDir；0=成功、1=失敗、2=未內嵌
+int paxidx_cc_driver(const char *buildDir, int argc, const char * const *argv,
+                     char *report, size_t capacity);
+
 /// Nyxian CoreCompiler 載入實測（實驗）：dlopen App 內嵌的
 /// CoreCompiler.framework 並讀其版本符號，報告寫入 buffer；
 /// 0=載入成功、1=載入失敗、2=未內嵌

@@ -104,4 +104,40 @@ enum CoreCompilerService {
         args.append("-lSystem")
         return runJob(type: 4, args: args)
     }
+
+    /// 以 clang driver 組裝＋執行（源文件一次編＋連）：旗標只給 driver
+    /// 語法，-cc1 參數由框架內的 clang driver 按 SDK 布局展開（Nyxian
+    /// 同款 CCDriver 路），不再手寫搜尋路徑清單。
+    static func buildWithDriver(sources: [URL], output: URL, buildDir: URL,
+                                sdk: URL, res: URL,
+                                hasObjC: Bool, hasCpp: Bool) -> (rc: Int32, report: String) {
+        var args = ["-target", triple, "-isysroot", sdk.path,
+                    "-resource-dir", clangResourceDir(sdk: sdk, res: res)]
+        if hasObjC { args.append("-fblocks") }
+        args += sources.map { $0.path }
+        args += ["-o", output.path]
+        if hasObjC {
+            args += ["-framework", "Foundation", "-framework", "UIKit",
+                     "-framework", "CoreGraphics", "-lobjc"]
+        }
+        if hasCpp { args.append("-lc++") }
+        var result: (rc: Int32, report: String) = (1, "")
+        let sem = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            var buf = [CChar](repeating: 0, count: 262144)
+            let rc: Int32 = buildDir.path.withCString { bd in
+                buf.withUnsafeMutableBufferPointer { bptr in
+                    args.withCStrings { argc, argv in
+                        paxidx_cc_driver(bd, argc, argv, bptr.baseAddress, bptr.count)
+                    }
+                }
+            }
+            result = (rc, String(cString: buf))
+            sem.signal()
+        }
+        thread.stackSize = 64 * 1024 * 1024
+        thread.start()
+        sem.wait()
+        return result
+    }
 }
