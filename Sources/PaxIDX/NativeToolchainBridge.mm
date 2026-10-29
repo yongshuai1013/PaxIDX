@@ -855,15 +855,26 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 {
                     [fm removeItemAtPath:resDir error:nil];
                     [fm createDirectoryAtPath:resDir withIntermediateDirectories:YES attributes:nil error:nil];
-                    [fm copyItemAtPath:[swiftForSDK stringByAppendingPathComponent:@"shims"]
+                    NSString *nyxRes = [[NSBundle mainBundle] pathForResource:@"NyxRes" ofType:nil];
+                    NSString *shimsSrc = nyxRes ? [nyxRes stringByAppendingPathComponent:@"shims"]
+                                                 : [swiftForSDK stringByAppendingPathComponent:@"shims"];
+                    [fm copyItemAtPath:shimsSrc
                         toPath:[resDir stringByAppendingPathComponent:@"shims"] error:nil];
+                    if (nyxRes) {
+                        // S9：clang 內建頭（stddef.h 等）也進 resource-dir——缺它時
+                        // SDK 的 c_standard_library.modulemap 守衛模塊 _stddef 會以
+                        // found_incompatible_headers__check_search_paths 報錯（S8 實證）
+                        [fm copyItemAtPath:[nyxRes stringByAppendingPathComponent:@"clang"]
+                            toPath:[resDir stringByAppendingPathComponent:@"clang"] error:nil];
+                        line("S：resource-dir 併入 NyxRes 的 shims＋clang 內建頭（BSROOT 本尊）");
+                    }
                     NSString *topMap = @"extern module SwiftShims             \"shims/module.modulemap\"\nextern module _SwiftConcurrencyShims \"shims/module.modulemap\"\nextern module SwiftOverlayShims      \"shims/module.modulemap\"\n";
                     [topMap writeToFile:[resDir stringByAppendingPathComponent:@"module.modulemap"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                     line("S：合規 resource-dir 已組（shims 複製＋頂層 module.modulemap 已寫）");
                 }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                     @"-sdk", ssdk, @"-resource-dir", resDir, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S8(前端直打+影子SDK+原始框架模塊+合規resource-dir)");
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S9(前端直打+影子SDK+原始框架模塊+BSROOT resource-dir)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -871,9 +882,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S8/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S9/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S8/S2 亦無產物");
+                    line("S9/S2 亦無產物");
                 }
             }
             nyxMark("S done");

@@ -92,6 +92,12 @@ jobs:
               print('patched minos->15.0:', os.path.basename(path))
           PYEOF
             cp -R /tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
+            echo "nyx_test：抽 Nyxian BSROOT 的 shims＋clang＋頂層表組 NyxRes（S9 resource-dir 用）"
+            unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Shared/swift.zip" -d /tmp/nyx
+            unzip -o -q /tmp/nyx/Payload/Nyxian.app/Shared/swift.zip "swift/shims/*" "swift/clang/*" "swift/module.modulemap" -d /tmp/nyxres
+            mkdir -p build/ipa/Payload/PaxIDX.app/NyxRes
+            cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap build/ipa/Payload/PaxIDX.app/NyxRes/
+            ls build/ipa/Payload/PaxIDX.app/NyxRes
             ls -la build/ipa/Payload/PaxIDX.app/Frameworks/
             echo "nyx_test：內嵌原始 SDK 的 usr/lib/swift 介面集（S 段影子 SDK 用）"
             curl -sSL -o /tmp/darwin-sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
