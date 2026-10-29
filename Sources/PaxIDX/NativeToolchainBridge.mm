@@ -777,7 +777,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     [fm removeItemAtPath:ssdk error:nil];
                     [fm createDirectoryAtPath:ssdk withIntermediateDirectories:YES attributes:nil error:nil];
                     for (NSString *name in [fm contentsOfDirectoryAtPath:sdk error:nil] ?: @[]) {
-                        if ([name isEqualToString:@"usr"]) continue;
+                        if ([name isEqualToString:@"usr"] || [name isEqualToString:@"System"]) continue;
                         [fm createSymbolicLinkAtPath:[ssdk stringByAppendingPathComponent:name]
                             withDestinationPath:[sdk stringByAppendingPathComponent:name] error:nil];
                     }
@@ -799,7 +799,52 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     }
                     [fm createSymbolicLinkAtPath:[ssdkLib stringByAppendingPathComponent:@"swift"]
                         withDestinationPath:swiftForSDK error:nil];
-                    line("S：影子 SDK 已建（usr/lib/swift→介面影子集，其餘符號連結回原 SDK）");
+                    // S8：框架的 .swiftmodule 同樣被自家 6.2.4 疊加成二進制
+                    // （S7 實證 Foundation 段同錯）。System 改實目錄逐層建：
+                    // Frameworks 逐個框架換上包內原始 Modules（NyxFwModules）。
+                    NSString *fwPristine = [[NSBundle mainBundle] pathForResource:@"NyxFwModules" ofType:nil];
+                    {
+                        NSString *sdkSys = [sdk stringByAppendingPathComponent:@"System"];
+                        NSString *ssdkSys = [ssdk stringByAppendingPathComponent:@"System"];
+                        [fm createDirectoryAtPath:ssdkSys withIntermediateDirectories:YES attributes:nil error:nil];
+                        for (NSString *name in [fm contentsOfDirectoryAtPath:sdkSys error:nil] ?: @[]) {
+                            if ([name isEqualToString:@"Library"]) continue;
+                            [fm createSymbolicLinkAtPath:[ssdkSys stringByAppendingPathComponent:name]
+                                withDestinationPath:[sdkSys stringByAppendingPathComponent:name] error:nil];
+                        }
+                        NSString *sdkSL = [sdkSys stringByAppendingPathComponent:@"Library"];
+                        NSString *ssdkSL = [ssdkSys stringByAppendingPathComponent:@"Library"];
+                        [fm createDirectoryAtPath:ssdkSL withIntermediateDirectories:YES attributes:nil error:nil];
+                        for (NSString *name in [fm contentsOfDirectoryAtPath:sdkSL error:nil] ?: @[]) {
+                            if ([name isEqualToString:@"Frameworks"]) continue;
+                            [fm createSymbolicLinkAtPath:[ssdkSL stringByAppendingPathComponent:name]
+                                withDestinationPath:[sdkSL stringByAppendingPathComponent:name] error:nil];
+                        }
+                        NSString *sdkFw = [sdkSL stringByAppendingPathComponent:@"Frameworks"];
+                        NSString *ssdkFw = [ssdkSL stringByAppendingPathComponent:@"Frameworks"];
+                        [fm createDirectoryAtPath:ssdkFw withIntermediateDirectories:YES attributes:nil error:nil];
+                        int fwSwapped = 0;
+                        for (NSString *name in [fm contentsOfDirectoryAtPath:sdkFw error:nil] ?: @[]) {
+                            NSString *pfwModules = fwPristine ? [[fwPristine stringByAppendingPathComponent:name] stringByAppendingPathComponent:@"Modules"] : nil;
+                            if (pfwModules && [fm fileExistsAtPath:pfwModules]) {
+                                NSString *ofw = [sdkFw stringByAppendingPathComponent:name];
+                                NSString *sfw = [ssdkFw stringByAppendingPathComponent:name];
+                                [fm createDirectoryAtPath:sfw withIntermediateDirectories:YES attributes:nil error:nil];
+                                for (NSString *sub in [fm contentsOfDirectoryAtPath:ofw error:nil] ?: @[]) {
+                                    if ([sub isEqualToString:@"Modules"]) continue;
+                                    [fm createSymbolicLinkAtPath:[sfw stringByAppendingPathComponent:sub]
+                                        withDestinationPath:[ofw stringByAppendingPathComponent:sub] error:nil];
+                                }
+                                [fm createSymbolicLinkAtPath:[sfw stringByAppendingPathComponent:@"Modules"]
+                                    withDestinationPath:pfwModules error:nil];
+                                fwSwapped++;
+                            } else {
+                                [fm createSymbolicLinkAtPath:[ssdkFw stringByAppendingPathComponent:name]
+                                    withDestinationPath:[sdkFw stringByAppendingPathComponent:name] error:nil];
+                            }
+                        }
+                        line("S：影子 SDK 已建（usr/lib/swift→原始介面集，Frameworks 換原始 Modules " + std::to_string(fwSwapped) + " 個，其餘符號連結回原 SDK）");
+                    }
                 }
                 // S7：SwiftShims 是靠 resource-dir 頂層 module.modulemap 的 extern
                 // module 宣告登記的（Nyxian 的 BSROOT/swift 有這張表）；SDK 的
@@ -818,7 +863,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                     @"-sdk", ssdk, @"-resource-dir", resDir, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S7(前端直打+影子SDK+合規resource-dir)");
+                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S8(前端直打+影子SDK+原始框架模塊+合規resource-dir)");
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -826,9 +871,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S7/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S8/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S7/S2 亦無產物");
+                    line("S8/S2 亦無產物");
                 }
             }
             nyxMark("S done");

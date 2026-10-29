@@ -104,6 +104,20 @@ jobs:
             # 這支 .a 開頭是 FAT Mach-O 魔數，TrollStore 安裝時 ldid 全包掃簽會
             # 卡死在它身上（錯誤 175）；與探針無關，剔除
             rm -f build/ipa/Payload/PaxIDX.app/NyxInterfaces/libswiftAuthenticationServicesSwiftSDKOverlay.a
+            # S8：原始 SDK 的框架 Modules 一併內嵌（只有 .swiftinterface；
+            # 裝置 SDK 那份同樣被 6.2.4 二進制疊加，S7 在 Foundation 段實證）
+            unzip -o -q /tmp/darwin-sdk.zip "*/System/Library/Frameworks/*" -d /tmp/sdkfw
+            FWROOT=$(find /tmp/sdkfw -type d -path "*/System/Library/Frameworks" | head -1)
+            echo "框架 Modules 來源：$FWROOT"
+            mkdir -p build/ipa/Payload/PaxIDX.app/NyxFwModules
+            for fw in "$FWROOT"/*.framework; do
+              name=$(basename "$fw")
+              if [ -d "$fw/Modules" ]; then
+                mkdir -p "build/ipa/Payload/PaxIDX.app/NyxFwModules/$name"
+                cp -R "$fw/Modules" "build/ipa/Payload/PaxIDX.app/NyxFwModules/$name/Modules"
+              fi
+            done
+            echo "NyxFwModules 框架數：$(ls build/ipa/Payload/PaxIDX.app/NyxFwModules | wc -l)"
             ls build/ipa/Payload/PaxIDX.app/NyxInterfaces/ | head -5
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
