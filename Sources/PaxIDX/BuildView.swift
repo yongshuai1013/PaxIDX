@@ -60,15 +60,6 @@ struct BuildView: View {
     var body: some View {
         VStack(spacing: 0) {
             List {
-                Section(header: Text("編譯 SDK")) {
-                    if installedSDKs.isEmpty {
-                        Text("尚未安裝 SDK（首次編譯時會自動解壓內嵌的那份，也可到設定→「下載 SDK」管理版本）")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        Text("iOS \((installedSDKs.first { $0.folderName == selectedSDKFolder } ?? installedSDKs.first!).version)")
-                    }
-                }
                 Section(header: Text("源文件")) {
                     ForEach(sourceFiles, id: \.self) { file in
                         NavigationLink(destination: FileEditorView(project: project, filename: file, onSave: { reloadFiles() })) {
