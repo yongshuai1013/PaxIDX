@@ -92,39 +92,20 @@ jobs:
               print('patched minos->15.0:', os.path.basename(path))
           PYEOF
             cp -R /tmp/nyx/Payload/Nyxian.app/Frameworks/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
-            echo "nyx_test：抽 Nyxian BSROOT 的 shims＋clang＋頂層表組 NyxRes（S9 resource-dir 用）"
+            echo "nyx_test：組 PaxSDK.zip（完整原始 SDK＋BSROOT res，他們的打包法；S10 用）"
             unzip -o -q /tmp/nyxian.ipa "Payload/Nyxian.app/Shared/swift.zip" -d /tmp/nyx
             unzip -o -q /tmp/nyx/Payload/Nyxian.app/Shared/swift.zip "swift/shims/*" "swift/clang/*" "swift/module.modulemap" -d /tmp/nyxres
-            mkdir -p build/ipa/Payload/PaxIDX.app/NyxRes
-            cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap build/ipa/Payload/PaxIDX.app/NyxRes/
-            ls build/ipa/Payload/PaxIDX.app/NyxRes
-            ls -la build/ipa/Payload/PaxIDX.app/Frameworks/
-            echo "nyx_test：內嵌原始 SDK 的 usr/lib/swift 介面集（S 段影子 SDK 用）"
             curl -sSL -o /tmp/darwin-sdk.zip "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
-            mkdir -p /tmp/sdkx build/ipa/Payload/PaxIDX.app/NyxInterfaces
-            unzip -l /tmp/darwin-sdk.zip | head -5
-            unzip -o -q /tmp/darwin-sdk.zip "*/usr/lib/swift/*" -d /tmp/sdkx
-            SWIFTDIR=$(find /tmp/sdkx -type d -path "*/usr/lib/swift" | head -1)
-            echo "介面集來源：$SWIFTDIR"
-            cp -R "$SWIFTDIR/." build/ipa/Payload/PaxIDX.app/NyxInterfaces/
-            # 這支 .a 開頭是 FAT Mach-O 魔數，TrollStore 安裝時 ldid 全包掃簽會
-            # 卡死在它身上（錯誤 175）；與探針無關，剔除
-            rm -f build/ipa/Payload/PaxIDX.app/NyxInterfaces/libswiftAuthenticationServicesSwiftSDKOverlay.a
-            # S8：原始 SDK 的框架 Modules 一併內嵌（只有 .swiftinterface；
-            # 裝置 SDK 那份同樣被 6.2.4 二進制疊加，S7 在 Foundation 段實證）
-            unzip -o -q /tmp/darwin-sdk.zip "*/System/Library/Frameworks/*" -d /tmp/sdkfw
-            FWROOT=$(find /tmp/sdkfw -type d -path "*/System/Library/Frameworks" | head -1)
-            echo "框架 Modules 來源：$FWROOT"
-            mkdir -p build/ipa/Payload/PaxIDX.app/NyxFwModules
-            for fw in "$FWROOT"/*.framework; do
-              name=$(basename "$fw")
-              if [ -d "$fw/Modules" ]; then
-                mkdir -p "build/ipa/Payload/PaxIDX.app/NyxFwModules/$name"
-                cp -R "$fw/Modules" "build/ipa/Payload/PaxIDX.app/NyxFwModules/$name/Modules"
-              fi
-            done
-            echo "NyxFwModules 框架數：$(ls build/ipa/Payload/PaxIDX.app/NyxFwModules | wc -l)"
-            ls build/ipa/Payload/PaxIDX.app/NyxInterfaces/ | head -5
+            unzip -o -q /tmp/darwin-sdk.zip -d /tmp/paxsdkfull
+            SDKROOT2=$(find /tmp/paxsdkfull -maxdepth 3 -type d -name "iPhoneOS.sdk" | head -1)
+            echo "原始 SDK 來源：$SDKROOT2"
+            rm -rf /tmp/paxsdk && mkdir -p /tmp/paxsdk/res
+            cp -R "$SDKROOT2" /tmp/paxsdk/iPhoneOS.sdk
+            rm -f /tmp/paxsdk/iPhoneOS.sdk/usr/lib/swift/libswiftAuthenticationServicesSwiftSDKOverlay.a
+            cp -R /tmp/nyxres/swift/shims /tmp/nyxres/swift/clang /tmp/nyxres/swift/module.modulemap /tmp/paxsdk/res/
+            APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
+            (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
+            ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
           fi
           cd build/ipa && zip -r ../PaxIDX-unsigned.ipa Payload
 

@@ -872,9 +872,27 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     [topMap writeToFile:[resDir stringByAppendingPathComponent:@"module.modulemap"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
                     line("S：合規 resource-dir 已組（shims 複製＋頂層 module.modulemap 已寫）");
                 }
-                runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
-                    @"-sdk", ssdk, @"-resource-dir", resDir, @"-module-cache-path", scache,
-                    @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S9(前端直打+影子SDK+原始框架模塊+BSROOT resource-dir)");
+                // S10：他們的打包法——App 自帶 PaxSDK.zip（完整乾淨 SDK＋
+                // BSROOT res），Swift 側 bootstrap 已解壓到 Documents/PaxSDK。
+                // 就位就直指（不走影子／拼裝），缺位才退回 S9 影子配方。
+                NSString *docsDir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+                NSString *paxSDKRoot = [docsDir stringByAppendingPathComponent:@"PaxSDK"];
+                NSString *bundledSDK = [paxSDKRoot stringByAppendingPathComponent:@"iPhoneOS.sdk"];
+                NSString *bundledRes = [paxSDKRoot stringByAppendingPathComponent:@"res"];
+                BOOL bundledOK = [fm fileExistsAtPath:[bundledSDK stringByAppendingPathComponent:@"usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface"]]
+                               && [fm fileExistsAtPath:[bundledRes stringByAppendingPathComponent:@"module.modulemap"]]
+                               && [fm fileExistsAtPath:[bundledRes stringByAppendingPathComponent:@"clang/include/stddef.h"]];
+                if (bundledOK) {
+                    line("S：包內 SDK 已就位（Documents/PaxSDK），S10 直指打包 SDK");
+                    runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                        @"-sdk", bundledSDK, @"-resource-dir", bundledRes, @"-module-cache-path", scache,
+                        @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S10(打包SDK直指)");
+                } else {
+                    line("S：包內 SDK 未就位，退回 S9 影子配方");
+                    runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
+                        @"-sdk", ssdk, @"-resource-dir", resDir, @"-module-cache-path", scache,
+                        @"-o", sobj, @"-module-name", @"PaxProbe", @"-enable-objc-interop", @"-parse-as-library"], "S9(影子配方)");
+                }
                 if (![fm fileExistsAtPath:sobj]) {
                     runJobT(2, @[@"-frontend", @"-c", @"-primary-file", ssrc, @"-target", @"arm64-apple-ios15.0",
                         @"-sdk", sdk, @"-resource-dir", swiftRes, @"-module-cache-path", scache,
@@ -882,9 +900,9 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 }
                 if ([fm fileExistsAtPath:sobj]) {
                     unsigned long long sz = [[fm attributesOfItemAtPath:sobj error:nil] fileSize];
-                    line("S9/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
+                    line("S10/S9/S2 產物 probe_swift.o 已生成，大小 " + std::to_string(sz) + " 位元組");
                 } else {
-                    line("S9/S2 亦無產物");
+                    line("S10/S9/S2 亦無產物");
                 }
             }
             nyxMark("S done");

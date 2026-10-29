@@ -1,4 +1,5 @@
 import SwiftUI
+import Zip
 
 /// Nyxian CoreCompiler 載入實測頁（實驗，2026-10-26）：
 /// 離線體檢顯示 Nyxian 的 CoreCompiler（minos 16.0）在符號層與
@@ -75,6 +76,7 @@ struct NyxLoadTestView: View {
         compileReport = "執行中…"
         // 用大棧的專用線程跑，順便排除 GCD 工作線程棧太小（512KB）壓垮 LLVM 的可能
         let thread = Thread {
+            Self.bootstrapPaxSDK()
             var buf = [CChar](repeating: 0, count: 32768)
             let rc = paxidx_nyx_compile_test(&buf, buf.count)
             let text = String(cString: buf)
@@ -86,6 +88,21 @@ struct NyxLoadTestView: View {
         }
         thread.stackSize = 32 * 1024 * 1024
         thread.start()
+    }
+
+
+    /// 他們的打包法：App 自帶 PaxSDK.zip（完整乾淨 SDK＋BSROOT res），
+    /// 首次試編前解壓到 Documents/PaxSDK 固定根，橋接 S10 直指該根。
+    private static func bootstrapPaxSDK() {
+        guard let zip = Bundle.main.url(forResource: "PaxSDK", withExtension: "zip") else { return }
+        let fm = FileManager.default
+        let dest = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PaxSDK")
+        let sentinel = dest.appendingPathComponent(
+            "iPhoneOS.sdk/usr/lib/swift/Swift.swiftmodule/arm64-apple-ios.swiftinterface")
+        if fm.fileExists(atPath: sentinel.path) { return }
+        try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
+        try? Zip.unzipFile(zip, destination: dest, overwrite: true, password: nil)
     }
 
     private func runTest() {
