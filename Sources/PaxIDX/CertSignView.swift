@@ -77,7 +77,7 @@ struct CertSignView: View {
             }
         }
         .sheet(isPresented: $showShare) {
-            ShareSheet(items: [signedProbeURL])
+            CertShareSheet(items: [signedProbeURL])
         }
     }
 
@@ -152,7 +152,7 @@ struct DocPicker: UIViewControllerRepresentable {
     }
 }
 
-struct ShareSheet: UIViewControllerRepresentable {
+struct CertShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
