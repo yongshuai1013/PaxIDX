@@ -101,6 +101,17 @@ enum CoreCompilerService {
         if hasCpp { args.append("-lc++") }
         if hasSwift {
             args += ["-L" + sdk.appendingPathComponent("usr/lib/swift").path, "-lswiftCore"]
+            // Swift 6.4 前端會對舊系統 stdlib 發 autolink 到相容包
+            // （swiftCompatibility56/Packs 等）：它們是工具鏈側的靜態庫、
+            // 不在 SDK 內，隨 App 內附於 swift-compat/（見 Resources/），
+            // 補上搜尋路徑讓 lld 的 autolink 找得到（2026-10-30 真機實證
+            // 缺此路徑會 undefined __swift_FORCE_LOAD_$_swiftCompatibility56）。
+            let compatDir = Bundle.main.bundlePath + "/swift-compat"
+            if FileManager.default.fileExists(atPath: compatDir + "/libswiftCompatibility56.a") {
+                args += ["-L" + compatDir]
+            } else if FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/libswiftCompatibility56.a") {
+                args += ["-L" + Bundle.main.bundlePath]
+            }
         }
         args.append("-lSystem")
         return runJob(type: 4, args: args)
