@@ -112,6 +112,7 @@ enum CoreCompilerService {
                 args += ["-L" + compatDir]
             }
         }
+        args.append("-adhoc_codesign") // 同上：留簽名槽給證書簽名器
         args.append("-lSystem")
         return runJob(type: 4, args: args)
     }
@@ -127,6 +128,10 @@ enum CoreCompilerService {
         if hasObjC { args.append("-fblocks") }
         args += sources.map { $0.path }
         args += ["-o", output.path]
+        // 讓 lld 在產出裡留 LC_CODE_SIGNATURE（adhoc 占位）：我們的驅動
+        // 連結預設不帶，證書簽名器沒有既有簽名槽可換會直接失敗
+        // （2026-10-30 真機實證「沒有 LC_CODE_SIGNATURE」）。
+        args.append("-Wl,-adhoc_codesign")
         if hasObjC {
             args += ["-framework", "Foundation", "-framework", "UIKit",
                      "-framework", "CoreGraphics", "-lobjc"]
