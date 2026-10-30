@@ -347,9 +347,27 @@ struct BuildView: View {
                 try? fm.createDirectory(at: appDir, withIntermediateDirectories: true)
                 try? fm.copyItem(at: exePath, to: appDir.appendingPathComponent(project.name))
 
+                // 證書真簽名（簽名證書頁已導入身份時）：bundle id 改用描述檔的、
+                // 內嵌描述檔、主程式以開發者證書真簽；未導入身份時維持原行為。
+                var bundleID = project.bundleID
+                var signReport: String? = nil
+                var bidBuf = [CChar](repeating: 0, count: 256)
+                if paxidx_cert_profile_bundle_id(&bidBuf, bidBuf.count) == 0 {
+                    bundleID = String(cString: bidBuf)
+                    let profileSrc = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                        .appendingPathComponent("PaxIDXSigning", isDirectory: true)
+                        .appendingPathComponent("profile.mobileprovision")
+                    try? fm.copyItem(at: profileSrc, to: appDir.appendingPathComponent("embedded.mobileprovision"))
+                    var rep = [CChar](repeating: 0, count: 1024)
+                    let exeInApp = appDir.appendingPathComponent(project.name)
+                    let rc = paxidx_cert_sign_file(exeInApp.path, exeInApp.path, bundleID, &rep, rep.count)
+                    if rc != 0 { return "證書簽名失敗：\(String(cString: rep))" }
+                    signReport = String(cString: rep)
+                }
+
                 // 寫 Info.plist
                 let info: [String: Any] = [
-                    "CFBundleIdentifier": project.bundleID,
+                    "CFBundleIdentifier": bundleID,
                     "CFBundleName": project.name,
                     "CFBundleDisplayName": project.name,
                     "CFBundleShortVersionString": project.version,
@@ -362,6 +380,7 @@ struct BuildView: View {
                 let infoData = try? PropertyListSerialization.data(
                     fromPropertyList: info, format: .xml, options: 0)
                 try? infoData?.write(to: appDir.appendingPathComponent("Info.plist"))
+                if let signReport { log("證書簽名完成（bundle id：\(bundleID)）：\n\(signReport)") }
 
                 // 打包 IPA
                 let ipaURL = ProjectFiles.directory(for: project.name)

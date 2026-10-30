@@ -69,6 +69,7 @@ int paxidx_cert_import_profile(const char *profilePath, char *info, size_t cap);
 
 /// 目前身份摘要（未導入回空字串、傳回 1）
 int paxidx_cert_status(char *info, size_t cap);
+int paxidx_cert_profile_bundle_id(char *buf, size_t cap);
 
 /// 清除已導入身份
 int paxidx_cert_clear(void);
