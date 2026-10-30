@@ -60,6 +60,25 @@ int paxidx_nyx_progress(char *buffer, size_t capacity);
 int paxidx_swift_compile(int argc, const char * const *argv,
                          char *diagnostics, size_t diagnostics_capacity);
 
+/// 導入簽名證書（未加密 .p12，EiliStore/CodeSignKit 導出格式）：解析證書+私鑰並核對相符；
+/// info 回證書摘要；0=成功
+int paxidx_cert_import_p12(const char *p12Path, const char *password, char *info, size_t cap);
+
+/// 導入描述檔（.mobileprovision）：info 回摘要；0=成功
+int paxidx_cert_import_profile(const char *profilePath, char *info, size_t cap);
+
+/// 目前身份摘要（未導入回空字串、傳回 1）
+int paxidx_cert_status(char *info, size_t cap);
+
+/// 清除已導入身份
+int paxidx_cert_clear(void);
+
+/// 以導入身份真簽名單一 Mach-O（照 ZSign：雙 CodeDirectory + 真 CMS）；
+/// identOrNull 為 NULL 時 dylib 用 LC_ID_DYLIB；主程式自動掛 entitlements
+/// （有描述檔用描述檔改寫 app id，否則最小集）；report 回簽名摘要；0=成功
+int paxidx_cert_sign_file(const char *srcPath, const char *dstPath, const char *identOrNull,
+                          char *report, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

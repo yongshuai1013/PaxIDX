@@ -36,6 +36,14 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                Section(header: Text("簽名")) {
+                    NavigationLink(destination: CertSignView()) {
+                        Text("簽名證書（導入＋真簽名）")
+                    }
+                    Text("導入開發者證書（.p12）與描述檔，產出改用證書真簽名（照 ZSign 作法）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Section(header: Text("關於")) {
                     HStack {
                         Text("版本")
