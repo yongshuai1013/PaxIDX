@@ -2214,9 +2214,9 @@ int paxidx_cert_status(char* info, size_t cap) {
 
 // 打包簽名閘門：證書＋私鑰＋描述檔齊備時回 0 並給出去掉 team 前綴的 bundle id
 int paxidx_cert_profile_bundle_id(char* buf, size_t cap) {
-    if (!gCertDER || !gPrivKey || gProfileAppID.empty()) return 1;
-    size_t dot = gProfileAppID.find('.');
-    std::string bid = dot == std::string::npos ? gProfileAppID : gProfileAppID.substr(dot + 1);
+    if (!gCertDER || !gPrivKey || gProfileAppId.empty()) return 1;
+    size_t dot = gProfileAppId.find('.');
+    std::string bid = dot == std::string::npos ? gProfileAppId : gProfileAppId.substr(dot + 1);
     if (bid.empty() || bid.find('*') != std::string::npos) return 1;
     if (buf && cap) snprintf(buf, cap, "%s", bid.c_str());
     return 0;
