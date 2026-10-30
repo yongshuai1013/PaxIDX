@@ -30,11 +30,6 @@ targets:
     deploymentTarget: "15.0"
     dependencies:
       - package: Zip
-    resources:
-      # Swift 相容包靜態庫（工具鏈 usr/lib/swift/iphoneos 原件）：
-      # 裝置端連結 Swift 專案時供 lld autolink 搜尋，非 App 自身連結
-      - path: Resources/swift-compat
-        type: folder
     sources:
       - path: Sources/PaxIDX
         excludes:
