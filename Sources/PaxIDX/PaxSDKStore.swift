@@ -144,7 +144,10 @@ enum PaxSDKStore {
     static func bootstrapEmbeddedIfNeeded() {
         let fm = FileManager.default
         let markerExists = fm.fileExists(atPath: embeddedMarker.path)
-        if markerExists && !installedSDKs().isEmpty { return }
+        // 相容庫未補進 res 前不算 bootstrap 完成：讓舊裝置重跑 install()
+        // 觸發 swift-compat 補位（見 install 內遷移段）
+        let compatOK = fm.fileExists(atPath: resDir.appendingPathComponent("swift-compat/libswiftCompatibility56.a").path)
+        if markerExists && !installedSDKs().isEmpty && compatOK { return }
         guard let zip = Bundle.main.url(forResource: "PaxSDK", withExtension: "zip") else { return }
         if let sdk = try? install(zipAt: zip) {
             try? fm.createDirectory(at: root, withIntermediateDirectories: true)
