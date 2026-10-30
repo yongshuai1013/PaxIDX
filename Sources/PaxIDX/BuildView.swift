@@ -286,6 +286,16 @@ struct BuildView: View {
                 }
                 var objects: [URL] = []
                 var hasObjC = false, hasSwift = false, hasCpp = false
+                // Swift 入口模式：有 @UIApplicationMain／@main 屬性必須以
+                // library 模式編（前端無 -parse-as-library 時把模組當成含
+                // 頂層代碼、直接拒絕該屬性——2026-10-30 真機實證）；
+                // 多文件且無 main.swift 亦然；其餘（print 範本類腳本）走
+                // 頂層代碼入口。
+                let swiftTexts = swiftFiles.map { (try? String(contentsOf: $0, encoding: .utf8)) ?? "" }
+                let hasEntryAttr = swiftTexts.contains { $0.contains("@UIApplicationMain") || $0.contains("@main") }
+                let hasMainFile = swiftFiles.contains { $0.lastPathComponent == "main.swift" }
+                let parseAsLibrary = hasEntryAttr || (swiftFiles.count > 1 && !hasMainFile)
+                log("Swift 入口模式：\(parseAsLibrary ? "library" : "script")")
                 for src in sources {
                     let srcURL = sourcesDir.appendingPathComponent(src)
                     let objURL = buildDir.appendingPathComponent((src as NSString).deletingPathExtension + ".o")
@@ -297,7 +307,8 @@ struct BuildView: View {
                         hasSwift = true
                         r = CoreCompilerService.compileSwift(source: srcURL, allSwift: swiftFiles,
                                                              object: objURL, sdk: sdk.url, res: res,
-                                                             moduleName: moduleName, moduleCache: cacheDir)
+                                                             moduleName: moduleName, moduleCache: cacheDir,
+                                                             parseAsLibrary: parseAsLibrary)
                     } else {
                         if ext == "m" || ext == "mm" { hasObjC = true }
                         if ext == "cpp" || ext == "cc" || ext == "mm" { hasCpp = true }

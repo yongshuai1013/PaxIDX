@@ -75,13 +75,14 @@ enum CoreCompilerService {
 
     /// 編譯單個 Swift 源文件（CCJob type 2，配方照 S10）
     static func compileSwift(source: URL, allSwift: [URL], object: URL, sdk: URL, res: URL,
-                             moduleName: String, moduleCache: URL) -> (rc: Int32, report: String) {
+                             moduleName: String, moduleCache: URL,
+                             parseAsLibrary: Bool) -> (rc: Int32, report: String) {
         var args = ["-frontend", "-c", "-primary-file", source.path]
         args += allSwift.filter { $0 != source }.map { $0.path }
         args += ["-target", triple, "-sdk", sdk.path, "-resource-dir", res.path,
                  "-module-cache-path", moduleCache.path,
                  "-o", object.path, "-module-name", moduleName, "-enable-objc-interop"]
-        if allSwift.count > 1 { args.append("-parse-as-library") }
+        if parseAsLibrary { args.append("-parse-as-library") }
         return runJob(type: 2, args: args)
     }
 
