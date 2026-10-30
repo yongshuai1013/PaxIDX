@@ -580,6 +580,47 @@ static void paxDumpSuperblob(const char *path, const char *tag, std::string &out
     }
 }
 
+static bool gGraftTrueReq = false;
+static void paxDumpReq(const char *path, const char *label, std::string &out) {
+    FILE *f = fopen(path, "rb"); if (!f) { out = std::string(label) + "：開檔失敗"; return; }
+    fseek(f, 0, SEEK_END); long fs = ftell(f); fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> m((size_t)(fs > 0 ? fs : 0));
+    if (fs <= 0 || fread(m.data(), 1, m.size(), f) != m.size()) { fclose(f); out = std::string(label) + "：讀檔失敗"; return; }
+    fclose(f);
+    auto be32 = [](const uint8_t *p) -> uint32_t { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]; };
+    uint32_t ncmds; memcpy(&ncmds, m.data() + 16, 4);
+    size_t lc = 32; uint32_t so = 0, ss = 0;
+    for (uint32_t i = 0; i < ncmds && lc + 8 <= m.size(); i++) { uint32_t c, cs; memcpy(&c, m.data() + lc, 4); memcpy(&cs, m.data() + lc + 4, 4); if (cs < 8) break; if (c == 0x1d) { memcpy(&so, m.data() + lc + 8, 4); memcpy(&ss, m.data() + lc + 12, 4); } lc += cs; }
+    if (!so || (uint64_t)so + ss > m.size()) { out = std::string(label) + "：無簽名區"; return; }
+    const uint8_t *sb = m.data() + so;
+    uint32_t cnt = be32(sb + 8);
+    char buf[256];
+    out = std::string(label) + " req/特殊槽：";
+    for (uint32_t k = 0; k < cnt; k++) {
+        uint32_t t = be32(sb + 12 + k * 8), o = be32(sb + 12 + k * 8 + 4);
+        if ((uint64_t)o + 8 > ss) continue;
+        uint32_t len = be32(sb + o + 4);
+        if (t == 2) {
+            snprintf(buf, sizeof(buf), "\nreq L%u hex:", len); out += buf;
+            for (uint32_t i = 0; i < len; i += 24) {
+                out += "\n  ";
+                for (uint32_t j = i; j < i + 24 && j < len; j++) { snprintf(buf, sizeof(buf), "%02x", sb[o + j]); out += buf; }
+            }
+        } else if (t == 0 || t == 4096) {
+            const uint8_t *cd = sb + o;
+            uint32_t hOff = be32(cd + 16), nSp = be32(cd + 24), hSz = cd[36];
+            if (hOff > len || nSp > 8 || hSz == 0 || hSz > 64) continue;
+            const uint8_t *h0 = cd + hOff - (size_t)nSp * hSz;
+            out += (t == 0 ? "\n主CD特殊槽 " : "\naltCD特殊槽 ");
+            for (uint32_t s = 1; s <= nSp && s <= 7; s++) {
+                const uint8_t *h = h0 + (size_t)(nSp - s) * hSz;
+                snprintf(buf, sizeof(buf), "s-%u=", s); out += buf;
+                for (int j = 0; j < 8 && j < (int)hSz; j++) { snprintf(buf, sizeof(buf), "%02x", h[j]); out += buf; }
+                out += " ";
+            }
+        }
+    }
+}
 static bool paxGraftSignMachO(const char *path, const char *donorPath, std::string &detail) {
     auto readFile = [](const char *p, std::vector<uint8_t> &out) -> bool {
         FILE *f = fopen(p, "rb"); if (!f) return false;
@@ -626,6 +667,7 @@ static bool paxGraftSignMachO(const char *path, const char *donorPath, std::stri
         else if (t == 4096) donorAlt = part;
     }
     if (donorCD.empty() || donorReq.empty() || donorCMS.empty() || donorAlt.empty()) { detail = "donor 組件不全"; return false; }
+    if (gGraftTrueReq) { donorReq.assign({0xfa, 0xde, 0x0c, 0x01, 0, 0, 0, 12, 0, 0, 0, 1}); }
     auto cdStr = [&](const std::vector<uint8_t> &cd, size_t off) -> std::string {
         if (off == 0 || off >= cd.size()) return std::string();
         return std::string((const char *)cd.data() + off);
@@ -1063,6 +1105,18 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                         } else {
                             line("G11[癸4]：複製 lld 產出失敗");
                         }
+                        NSString *glibT = [dir stringByAppendingPathComponent:@"libprobe_g_truereq.dylib"];
+                        [fm removeItemAtPath:glibT error:nil];
+                        if ([fm copyItemAtPath:glibA toPath:glibT error:nil]) {
+                            gGraftTrueReq = true;
+                            std::string tdetail;
+                            bool tok2 = paxGraftSignMachO(glibT.UTF8String, donorWu.UTF8String, tdetail);
+                            gGraftTrueReq = false;
+                            line(std::string("G12[癸5 graft@自產·donor戊·恆真req]：") + tdetail);
+                            if (tok2) tryLoad(glibT, "G12[癸5 恆真req自產]");
+                        } else {
+                            line("G12[癸5]：複製 lld 產出失敗");
+                        }
                     }
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
@@ -1090,6 +1144,7 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                     };
                     if ([fm fileExistsAtPath:fwSyntax]) {
                         { std::string d; paxDumpSuperblob(fwSyntax.UTF8String, "丙原簽", d); line(d); }
+                        { std::string d; paxDumpReq(fwSyntax.UTF8String, "丙req", d); line(d); }
                         NSString *copyC = [dir stringByAppendingPathComponent:@"libcopy_syntax.dylib"];
                         if (![fm fileExistsAtPath:copyC]) [fm copyItemAtPath:fwSyntax toPath:copyC error:nil];
                         tryLoadRaw(copyC, "G2[丙 良品tmp副本]");
@@ -1218,6 +1273,8 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                 NSString *srcP = [bundleDir stringByAppendingPathComponent:@"probe_ldid.dylib"];
                 NSString *dstP = [dir stringByAppendingPathComponent:@"probe_ldid.dylib"];
                 { std::string d; paxDumpSuperblob(srcP.UTF8String, "戊原簽（裝機版）", d); line(d); }
+                { std::string d; paxDumpReq(srcP.UTF8String, "戊req", d); line(d); }
+                { std::string d; paxDumpReq([[NSBundle mainBundle] executablePath].UTF8String, "主程式req", d); line(d); }
                 [fm removeItemAtPath:dstP error:nil];
                 if ([fm copyItemAtPath:srcP toPath:dstP error:nil]) {
                     void *h = dlopen(dstP.UTF8String, RTLD_NOW);
