@@ -581,6 +581,7 @@ static void paxDumpSuperblob(const char *path, const char *tag, std::string &out
 }
 
 static bool gGraftTrueReq = false;
+static bool gGraftLdidStyle = false;
 static void paxDumpReq(const char *path, const char *label, std::string &out) {
     FILE *f = fopen(path, "rb"); if (!f) { out = std::string(label) + "：開檔失敗"; return; }
     fseek(f, 0, SEEK_END); long fs = ftell(f); fseek(f, 0, SEEK_SET);
@@ -620,6 +621,24 @@ static void paxDumpReq(const char *path, const char *label, std::string &out) {
             }
         }
     }
+}
+static void paxDumpGeo(const char *path, const char *label, std::string &out) {
+    FILE *f = fopen(path, "rb"); if (!f) { out = std::string(label) + " GEO：開檔失敗"; return; }
+    fseek(f, 0, SEEK_END); long fs = ftell(f); fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> m((size_t)(fs > 0 ? fs : 0));
+    if (fs <= 0 || fread(m.data(), 1, m.size(), f) != m.size()) { fclose(f); out = std::string(label) + " GEO：讀檔失敗"; return; }
+    fclose(f);
+    uint32_t nc; memcpy(&nc, m.data() + 16, 4);
+    size_t lc = 32; int sigIdx = -1; uint64_t leFO = 0, leFS = 0, leVS = 0;
+    for (uint32_t i = 0; i < nc && lc + 8 <= m.size(); i++) {
+        uint32_t c, cs; memcpy(&c, m.data() + lc, 4); memcpy(&cs, m.data() + lc + 4, 4); if (cs < 8) break;
+        if (c == 0x1d) sigIdx = (int)i;
+        else if (c == 0x19) { char nm[17] = {0}; memcpy(nm, m.data() + lc + 8, 16); if (strcmp(nm, "__LINKEDIT") == 0) { memcpy(&leFO, m.data() + lc + 40, 8); memcpy(&leFS, m.data() + lc + 48, 8); memcpy(&leVS, m.data() + lc + 32, 8); } }
+        lc += cs;
+    }
+    char buf[320];
+    snprintf(buf, sizeof(buf), "%s GEO size=%ld ncmds=%u sigIdx=%d LINKEDIT fo=0x%llx fs=0x%llx vs=0x%llx", label, fs, nc, sigIdx, (unsigned long long)leFO, (unsigned long long)leFS, (unsigned long long)leVS);
+    out = buf;
 }
 static bool paxGraftSignMachO(const char *path, const char *donorPath, std::string &detail) {
     auto readFile = [](const char *p, std::vector<uint8_t> &out) -> bool {
@@ -712,6 +731,26 @@ static bool paxGraftSignMachO(const char *path, const char *donorPath, std::stri
         uint64_t nvs = leVS; uint64_t need = (nfs + 4095) & ~(uint64_t)4095; if (nvs < need) nvs = need;
         memcpy(img.data() + leVSPos, &nvs, 8);
         img.resize((size_t)sigOff + total, 0);
+    }
+    if (gGraftLdidStyle) {
+        // ldid 式檔案層處理（在算頁雜湊之前）：__LINKEDIT vmsize 以
+        // 16K 對齊；LC_CODE_SIGNATURE 移到 load commands 末尾
+        uint32_t nc3; memcpy(&nc3, img.data() + 16, 4);
+        uint32_t soc3; memcpy(&soc3, img.data() + 20, 4);
+        size_t lc3 = 32; size_t sigPos3 = 0; uint32_t sigIdx3 = 0;
+        for (uint32_t i = 0; i < nc3 && lc3 + 8 <= img.size(); i++) {
+            uint32_t cmd, csize; memcpy(&cmd, img.data() + lc3, 4); memcpy(&csize, img.data() + lc3 + 4, 4);
+            if (csize < 8) break;
+            if (cmd == 0x19) { char nm[17] = {0}; memcpy(nm, img.data() + lc3 + 8, 16); if (strcmp(nm, "__LINKEDIT") == 0) { uint64_t fs; memcpy(&fs, img.data() + lc3 + 48, 8); uint64_t vs; memcpy(&vs, img.data() + lc3 + 32, 8); uint64_t nvs = (fs + 16383) & ~(uint64_t)16383; if (nvs > vs) memcpy(img.data() + lc3 + 32, &nvs, 8); } }
+            else if (cmd == 0x1d) { sigPos3 = lc3; sigIdx3 = i; }
+            lc3 += csize;
+        }
+        if (sigPos3 && sigIdx3 != nc3 - 1) {
+            uint8_t tmpSig[16]; memcpy(tmpSig, img.data() + sigPos3, 16);
+            size_t cmdsEnd = 32 + soc3;
+            memmove(img.data() + sigPos3, img.data() + sigPos3 + 16, cmdsEnd - (sigPos3 + 16));
+            memcpy(img.data() + cmdsEnd - 16, tmpSig, 16);
+        }
     }
     std::vector<uint8_t> blob(total, 0);
     auto wr32 = [&](size_t o, uint32_t v) { uint32_t b = OSSwapHostToBigInt32(v); memcpy(blob.data() + o, &b, 4); };
@@ -1117,6 +1156,51 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                         } else {
                             line("G12[癸5]：複製 lld 產出失敗");
                         }
+                    }
+                    {
+                        NSString *fwDir13 = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Frameworks/CoreCompiler.framework/Frameworks"];
+                        NSString *syntax13 = [fwDir13 stringByAppendingPathComponent:@"lib_CompilerSwiftSyntax.dylib"];
+                        NSString *macros13 = [fwDir13 stringByAppendingPathComponent:@"lib_CompilerSwiftSyntaxMacros.dylib"];
+                        NSString *wu13 = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"probe_ldid.dylib"];
+                        { std::string d; paxDumpGeo(glibA.UTF8String, "GEO[自產probe]", d); line(d); }
+                        { std::string d; paxDumpGeo(syntax13.UTF8String, "GEO[syntax]", d); line(d); }
+                        { std::string d; paxDumpGeo(macros13.UTF8String, "GEO[Macros]", d); line(d); }
+                        { std::string d; paxDumpGeo(wu13.UTF8String, "GEO[戊]", d); line(d); }
+                        NSString *e1 = [dir stringByAppendingPathComponent:@"libmacros_orig.dylib"];
+                        [fm removeItemAtPath:e1 error:nil];
+                        if ([fm copyItemAtPath:macros13 toPath:e1 error:nil]) {
+                            tryLoad(e1, "G13[E1 Macros原簽直載]");
+                        } else { line("G13[E1]：複製 Macros 失敗"); }
+                        NSString *g6 = [dir stringByAppendingPathComponent:@"libprobe_g_ldid.dylib"];
+                        [fm removeItemAtPath:g6 error:nil];
+                        if ([fm copyItemAtPath:glibA toPath:g6 error:nil]) {
+                            gGraftLdidStyle = true;
+                            std::string d6;
+                            bool ok6 = paxGraftSignMachO(g6.UTF8String, syntax13.UTF8String, d6);
+                            gGraftLdidStyle = false;
+                            line(std::string("G13[癸6 graft@自產·ldid式]：") + d6);
+                            if (ok6) tryLoad(g6, "G13[癸6 ldid式自產]");
+                        } else { line("G13[癸6]：複製 lld 產出失敗"); }
+                        NSString *r2 = [dir stringByAppendingPathComponent:@"libmacros_g_ldid.dylib"];
+                        [fm removeItemAtPath:r2 error:nil];
+                        if ([fm copyItemAtPath:macros13 toPath:r2 error:nil]) {
+                            gGraftLdidStyle = true;
+                            std::string d2;
+                            bool ok2 = paxGraftSignMachO(r2.UTF8String, syntax13.UTF8String, d2);
+                            gGraftLdidStyle = false;
+                            line(std::string("G13[壬2 graft@Macros·ldid式]：") + d2);
+                            if (ok2) tryLoad(r2, "G13[壬2 ldid式Macros]");
+                        } else { line("G13[壬2]：複製 Macros 失敗"); }
+                        NSString *x2 = [dir stringByAppendingPathComponent:@"libsyntax_g_ldid.dylib"];
+                        [fm removeItemAtPath:x2 error:nil];
+                        if ([fm copyItemAtPath:syntax13 toPath:x2 error:nil]) {
+                            gGraftLdidStyle = true;
+                            std::string dx;
+                            bool okx = paxGraftSignMachO(x2.UTF8String, syntax13.UTF8String, dx);
+                            gGraftLdidStyle = false;
+                            line(std::string("G13[辛2 graft@良品·ldid式]：") + dx);
+                            if (okx) tryLoad(x2, "G13[辛2 ldid式良品]");
+                        } else { line("G13[辛2]：複製良品失敗"); }
                     }
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
