@@ -2214,6 +2214,22 @@ int paxidx_cert_status(char* info, size_t cap) {
 
 // 打包簽名閘門：證書＋私鑰＋描述檔齊備時回 0 並給出去掉 team 前綴的 bundle id
 int paxidx_cert_profile_bundle_id(char* buf, size_t cap) {
+    if (!gCertDER || !gPrivKey || gProfileAppId.empty()) {
+        // 打包路專用：身份未進記憶體時從 App 存檔自動載入（與 CertSignView
+        // .reload 同一套檔案、同一個導入函數；p12 未加密、密碼不參與）。
+        // 否則 App 重啟後直接編譯打包會靜默走未簽名路（2026-10-30 真機實證）。
+        NSString* base = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+        if (base) {
+            NSString* dir = [base stringByAppendingPathComponent:@"PaxIDXSigning"];
+            char dummy[512];
+            NSString* p12 = [dir stringByAppendingPathComponent:@"identity.p12"];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:p12])
+                paxidx_cert_import_p12([p12 fileSystemRepresentation], "", dummy, sizeof(dummy));
+            NSString* prof = [dir stringByAppendingPathComponent:@"profile.mobileprovision"];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:prof])
+                paxidx_cert_import_profile([prof fileSystemRepresentation], dummy, sizeof(dummy));
+        }
+    }
     if (!gCertDER || !gPrivKey || gProfileAppId.empty()) return 1;
     size_t dot = gProfileAppId.find('.');
     std::string bid = dot == std::string::npos ? gProfileAppId : gProfileAppId.substr(dot + 1);
