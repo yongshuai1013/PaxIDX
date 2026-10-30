@@ -2110,10 +2110,19 @@ int paxidx_cert_import_p12(const char* path, const char* password, char* info, s
         if (info && cap) snprintf(info, cap, "證書解析失敗: %s", err.c_str());
         return 1;
     }
+    // SecKey 私鑰建立要 PKCS#1 本體；key 是 PKCS#8（SEQ{ver, alg, OCTET{PKCS#1}}），先剝殼（本機 openssl 對照驗證逐位元組相符；真機 -50 定案）
+    std::vector<uint8_t> keyForSec = key;
+    {
+        DerNode p8, oct; size_t oo;
+        if (derRead(key.data(), key.size(), 0, p8) && p8.tag == 0x30 &&
+            derChild(key.data(), key.size(), 0, p8, 2, oo, oct) && oct.tag == 0x04) {
+            keyForSec.assign(key.begin() + (oo + oct.hdr), key.begin() + (oo + oct.hdr + oct.len));
+        }
+    }
     NSDictionary* attrs = @{ (id)kSecAttrKeyType: (id)kSecAttrKeyTypeRSA,
                              (id)kSecAttrKeyClass: (id)kSecAttrKeyClassPrivate };
     CFErrorRef cfErr = NULL;
-    SecKeyRef sk = SecKeyCreateWithData((__bridge CFDataRef)[NSData dataWithBytes:key.data() length:key.size()],
+    SecKeyRef sk = SecKeyCreateWithData((__bridge CFDataRef)[NSData dataWithBytes:keyForSec.data() length:keyForSec.size()],
                                         (__bridge CFDictionaryRef)attrs, &cfErr);
     if (!sk) {
         NSString* msg = cfErr ? [(__bridge NSError*)cfErr localizedDescription] : @"?";
