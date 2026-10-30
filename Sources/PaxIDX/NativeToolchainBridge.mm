@@ -1975,16 +1975,16 @@ bool parseCert(const uint8_t* b, size_t n, std::string& err) {
     gLeafIssuerTLV.assign(b + co, b + co + c.total);
     // issuer RDN 字串
     {
-        std::string s; size_t cur = co + c.hdr, end = cur + c.len; DerNode setNd;
+        std::string s; size_t cur = co + c.hdr, end = cur + c.len; DerNode setNd; size_t vo0 = 0;
         while (cur < end && derRead(b, n, cur, setNd)) {
             size_t sc = cur + setNd.hdr, se = sc + setNd.len; DerNode av;
             while (sc < se && derRead(b, n, sc, av)) {
                 size_t vo; DerNode ov, vv;
-                if (derChild(b, n, sc, av, 0, vo, ov) && derChild(b, n, sc, av, 1, vo, vv)) {
+                if (derChild(b, n, sc, av, 0, vo0, ov) && derChild(b, n, sc, av, 1, vo, vv)) {
                     const uint8_t* val = derVal(b, vo, vv);
                     if (vv.tag == 0x0c || vv.tag == 0x13 || vv.tag == 0x16) {
                         if (!s.empty()) s += ", ";
-                        s += oidToString(derVal(b, vo, ov), ov.len) + "=" + std::string((const char*)val, vv.len);
+                        s += oidToString(derVal(b, vo0, ov), ov.len) + "=" + std::string((const char*)val, vv.len);
                     }
                 }
                 sc += av.total;
@@ -1995,21 +1995,21 @@ bool parseCert(const uint8_t* b, size_t n, std::string& err) {
     }
     if (!derChild(b, n, tbsOff, t, idx + 3, co, c) || c.tag != 0x30) { err = "validity 缺失"; return false; }
     {
-        size_t vo; DerNode f, u;
-        if (derChild(b, n, co, c, 0, vo, f) && derChild(b, n, co, c, 1, vo, u)) {
-            gLeafValidStr = fmtTime(derVal(b, vo, f), f.len, f.tag == 0x18) + " ~ " + fmtTime(derVal(b, vo, u), u.len, u.tag == 0x18);
+        size_t vo, vo0; DerNode f, u;
+        if (derChild(b, n, co, c, 0, vo0, f) && derChild(b, n, co, c, 1, vo, u)) {
+            gLeafValidStr = fmtTime(derVal(b, vo0, f), f.len, f.tag == 0x18) + " ~ " + fmtTime(derVal(b, vo, u), u.len, u.tag == 0x18);
         }
     }
     if (!derChild(b, n, tbsOff, t, idx + 4, co, c) || c.tag != 0x30) { err = "subject 缺失"; return false; }
     {
         gLeafCN.clear(); gLeafOU.clear(); gLeafUID.clear();
-        size_t cur = co + c.hdr, end = cur + c.len; DerNode setNd;
+        size_t cur = co + c.hdr, end = cur + c.len; DerNode setNd; size_t vo0 = 0;
         while (cur < end && derRead(b, n, cur, setNd)) {
             size_t sc = cur + setNd.hdr, se = sc + setNd.len; DerNode av;
             while (sc < se && derRead(b, n, sc, av)) {
                 size_t vo; DerNode ov, vv;
-                if (derChild(b, n, sc, av, 0, vo, ov) && derChild(b, n, sc, av, 1, vo, vv)) {
-                    std::string oidS = oidToString(derVal(b, vo, ov), ov.len);
+                if (derChild(b, n, sc, av, 0, vo0, ov) && derChild(b, n, sc, av, 1, vo, vv)) {
+                    std::string oidS = oidToString(derVal(b, vo0, ov), ov.len);
                     const uint8_t* val = derVal(b, vo, vv);
                     std::string valS;
                     if (vv.tag == 0x0c || vv.tag == 0x13 || vv.tag == 0x16 || vv.tag == 0x14) valS.assign((const char*)val, vv.len);
