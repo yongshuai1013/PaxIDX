@@ -2028,9 +2028,9 @@ bool parseCert(const uint8_t* b, size_t n, std::string& err) {
 // 解析未加密 PKCS#12（CodeSignKit/EiliStore 導出格式）：抽 cert DER + PKCS#8
 bool parseP12(const uint8_t* b, size_t n, std::vector<uint8_t>& certOut, std::vector<uint8_t>& keyOut, std::string& err) {
     static const uint8_t OID_DATA[]   = {0x06,0x09,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x07,0x01};
-    static const uint8_t OID_CERTBAG[]= {0x06,0x0a,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x03};
-    static const uint8_t OID_KEYBAG[] = {0x06,0x0a,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x01};
-    static const uint8_t OID_SHROUDED[]={0x06,0x0a,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x02};
+    static const uint8_t OID_CERTBAG[]= {0x06,0x0b,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x03};
+    static const uint8_t OID_KEYBAG[] = {0x06,0x0b,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x01};
+    static const uint8_t OID_SHROUDED[]={0x06,0x0b,0x2a,0x86,0x48,0x86,0xf7,0x0d,0x01,0x0c,0x0a,0x01,0x02};
     DerNode pfx, ci; size_t off;
     if (!derRead(b, n, 0, pfx) || pfx.tag != 0x30) { err = "PFX 非 SEQUENCE"; return false; }
     if (!derChild(b, n, 0, pfx, 1, off, ci) || ci.tag != 0x30) { err = "AuthenticatedSafe ContentInfo 缺失"; return false; }
@@ -2046,9 +2046,9 @@ bool parseP12(const uint8_t* b, size_t n, std::vector<uint8_t>& certOut, std::ve
     size_t cur = as.hdr, end = as.hdr + as.len; DerNode sub;
     while (cur < end && derRead(asBase, asLen, cur, sub)) {
         if (sub.tag == 0x30) {
-            size_t so; DerNode soid, sa0;
-            if (derChild(asBase, asLen, cur, sub, 0, so, soid) && derChild(asBase, asLen, cur, sub, 1, so, sa0) && sa0.tag == 0xa0) {
-                if (oidEq(asBase, so, soid, OID_DATA, sizeof(OID_DATA))) {
+            size_t so, so0; DerNode soid, sa0;
+            if (derChild(asBase, asLen, cur, sub, 0, so0, soid) && derChild(asBase, asLen, cur, sub, 1, so, sa0) && sa0.tag == 0xa0) {
+                if (oidEq(asBase, so0, soid, OID_DATA, sizeof(OID_DATA))) {
                     size_t io; DerNode ios;
                     if (derRead(asBase, asLen, so + sa0.hdr, ios) && ios.tag == 0x04) {
                         const uint8_t* bags = derVal(asBase, so + sa0.hdr, ios);
@@ -2056,9 +2056,9 @@ bool parseP12(const uint8_t* b, size_t n, std::vector<uint8_t>& certOut, std::ve
                         if (derRead(bags, bl, 0, bagsSeq) && bagsSeq.tag == 0x30) {
                             size_t bc = bagsSeq.hdr, be = bc + bagsSeq.len; DerNode bag;
                             while (bc < be && derRead(bags, bl, bc, bag)) {
-                                size_t bo; DerNode boid, bv;
-                                if (derChild(bags, bl, bc, bag, 0, bo, boid) && derChild(bags, bl, bc, bag, 1, bo, bv) && bv.tag == 0xa0) {
-                                    if (oidEq(bags, bo, boid, OID_CERTBAG, sizeof(OID_CERTBAG))) {
+                                size_t bo, bo0; DerNode boid, bv;
+                                if (derChild(bags, bl, bc, bag, 0, bo0, boid) && derChild(bags, bl, bc, bag, 1, bo, bv) && bv.tag == 0xa0) {
+                                    if (oidEq(bags, bo0, boid, OID_CERTBAG, sizeof(OID_CERTBAG))) {
                                         size_t vo; DerNode cbv, cos2;
                                         if (derRead(bags, bl, bo + bv.hdr, cbv) && cbv.tag == 0x30 &&
                                             derChild(bags, bl, bo + bv.hdr, cbv, 1, vo, cos2) && cos2.tag == 0xa0) {
@@ -2066,9 +2066,9 @@ bool parseP12(const uint8_t* b, size_t n, std::vector<uint8_t>& certOut, std::ve
                                             if (derRead(bags, bl, vo + cos2.hdr, xos) && xos.tag == 0x04)
                                                 certOut.assign(derVal(bags, vo + cos2.hdr, xos), derVal(bags, vo + cos2.hdr, xos) + xos.len);
                                         }
-                                    } else if (oidEq(bags, bo, boid, OID_KEYBAG, sizeof(OID_KEYBAG))) {
+                                    } else if (oidEq(bags, bo0, boid, OID_KEYBAG, sizeof(OID_KEYBAG))) {
                                         keyOut.assign(bags + bo + bv.hdr, bags + bo + bv.hdr + bv.len);
-                                    } else if (oidEq(bags, bo, boid, OID_SHROUDED, sizeof(OID_SHROUDED))) {
+                                    } else if (oidEq(bags, bo0, boid, OID_SHROUDED, sizeof(OID_SHROUDED))) {
                                         sawEncrypted = true;
                                     }
                                 }
