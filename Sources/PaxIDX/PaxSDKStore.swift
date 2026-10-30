@@ -104,6 +104,13 @@ enum PaxSDKStore {
             if fm.fileExists(atPath: resDir.path) { try? fm.removeItem(at: resDir) }
             try fm.moveItem(at: srcRes, to: resDir)
         }
+        // 相容庫補位：舊 res 沒有 swift-compat 子目錄時，把新包的補進去
+        // （res 本體走「缺位才補」，此子目錄需專門遷移，否則老裝置永遠缺）
+        let srcCompat = srcRes.appendingPathComponent("swift-compat", isDirectory: true)
+        let dstCompat = resDir.appendingPathComponent("swift-compat", isDirectory: true)
+        if fm.fileExists(atPath: srcCompat.path), !fm.fileExists(atPath: dstCompat.path) {
+            try? fm.copyItem(at: srcCompat, to: dstCompat)
+        }
         // 舊佈局同版殘留清掉（避免雙份佔空間）
         if let lv = sdkVersion(at: legacySDK), lv == ver {
             try? fm.removeItem(at: legacySDK)

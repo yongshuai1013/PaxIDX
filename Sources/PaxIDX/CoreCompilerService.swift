@@ -103,14 +103,13 @@ enum CoreCompilerService {
             args += ["-L" + sdk.appendingPathComponent("usr/lib/swift").path, "-lswiftCore"]
             // Swift 6.4 前端會對舊系統 stdlib 發 autolink 到相容包
             // （swiftCompatibility56/Packs 等）：它們是工具鏈側的靜態庫、
-            // 不在 SDK 內，隨 App 內附於 swift-compat/（見 Resources/），
-            // 補上搜尋路徑讓 lld 的 autolink 找得到（2026-10-30 真機實證
-            // 缺此路徑會 undefined __swift_FORCE_LOAD_$_swiftCompatibility56）。
-            let compatDir = Bundle.main.bundlePath + "/swift-compat"
+            // 不在 SDK 內，跟工具鏈一起分發於 res/swift-compat/（PaxSDK.zip
+            // 內），補上搜尋路徑讓 lld 的 autolink 找得到（2026-10-30 真機
+            // 實證缺此路徑會 undefined __swift_FORCE_LOAD_$_swiftCompatibility56；
+            // 散放 .app 根目錄會讓安裝器 ldid 失敗，故定居 res）。
+            let compatDir = PaxSDKStore.resDir.appendingPathComponent("swift-compat").path
             if FileManager.default.fileExists(atPath: compatDir + "/libswiftCompatibility56.a") {
                 args += ["-L" + compatDir]
-            } else if FileManager.default.fileExists(atPath: Bundle.main.bundlePath + "/libswiftCompatibility56.a") {
-                args += ["-L" + Bundle.main.bundlePath]
             }
         }
         args.append("-lSystem")

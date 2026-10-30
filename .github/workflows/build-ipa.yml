@@ -75,11 +75,6 @@ jobs:
             CODE_SIGNING_REQUIRED=NO
           mkdir -p build/ipa/Payload
           cp -R build/PaxIDX.xcarchive/Products/Applications/PaxIDX.app build/ipa/Payload/
-          # Swift 相容庫整夾放入 .app（裝置端連結 Swift 專案時 lld autolink 搜尋用；
-          # project.yml resources 宣告兩度未帶入 .a，改走本 CI 複製＋斷言，缺檔即紅）
-          cp -R Resources/swift-compat build/ipa/Payload/PaxIDX.app/swift-compat
-          test -f build/ipa/Payload/PaxIDX.app/swift-compat/libswiftCompatibility56.a
-          ls -la build/ipa/Payload/PaxIDX.app/swift-compat/
           # dylib 塞進 Frameworks，跟 App 一起簽名（iOS 才允許 dlopen）
           mkdir -p build/ipa/Payload/PaxIDX.app/Frameworks
           cp Vendor/NativeToolchain/libPaxIDXNativeToolchain.dylib build/ipa/Payload/PaxIDX.app/Frameworks/
@@ -114,8 +109,13 @@ jobs:
             gh release download corecompiler-6.4-ios15 --repo yongshuai1013/PaxIDX --pattern "res.zip" --dir /tmp/ccres
             unzip -o -q /tmp/ccres/res.zip -d /tmp/paxsdk/res
             ls /tmp/paxsdk/res
+            echo "Swift 相容庫併入 res（跟工具鏈一起分發；散放 .app 會讓安裝器 ldid 失敗，2026-10-30 #243 真機實證）"
+            mkdir -p /tmp/paxsdk/res/swift-compat
+            cp Resources/swift-compat/*.a /tmp/paxsdk/res/swift-compat/
+            ls -la /tmp/paxsdk/res/swift-compat/
             APPZIP="$PWD/build/ipa/Payload/PaxIDX.app/PaxSDK.zip"
             (cd /tmp/paxsdk && zip -r -q "$APPZIP" iPhoneOS.sdk res)
+            unzip -l "$APPZIP" | grep -q "res/swift-compat/libswiftCompatibility56.a"
             echo "同版 PaxSDK.zip 發布到 release $RELTAG（App 設定頁「下載 SDK」取用）"
             gh release view "$RELTAG" --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create "$RELTAG" --repo yongshuai1013/PaxIDX --title "PaxSDK ($RELTAG)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
             gh release upload "$RELTAG" "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
