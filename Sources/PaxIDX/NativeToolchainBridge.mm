@@ -1040,6 +1040,30 @@ extern "C" int paxidx_nyx_compile_test(char *buffer, size_t capacity) {
                             if (pok) tryLoad(glibP, "G10[癸2 graft填充自產]");
                         }
                     }
+                    {
+                        NSString *donorWu = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"probe_ldid.dylib"];
+                        NSString *glibW = [dir stringByAppendingPathComponent:@"libprobe_g_wu.dylib"];
+                        [fm removeItemAtPath:glibW error:nil];
+                        if ([fm copyItemAtPath:glibA toPath:glibW error:nil]) {
+                            std::string wdetail;
+                            bool wok = paxGraftSignMachO(glibW.UTF8String, donorWu.UTF8String, wdetail);
+                            line(std::string("G11[癸3 graft@自產·donor戊]：") + wdetail);
+                            if (wok) tryLoad(glibW, "G11[癸3 donor戊自產]");
+                        } else {
+                            line("G11[癸3]：複製 lld 產出失敗");
+                        }
+                        NSString *donorExe = [[NSBundle mainBundle] executablePath];
+                        NSString *glibE = [dir stringByAppendingPathComponent:@"libprobe_g_exe.dylib"];
+                        [fm removeItemAtPath:glibE error:nil];
+                        if (donorExe && [fm copyItemAtPath:glibA toPath:glibE error:nil]) {
+                            std::string edetail;
+                            bool eok = paxGraftSignMachO(glibE.UTF8String, donorExe.UTF8String, edetail);
+                            line(std::string("G11[癸4 graft@自產·donor主程式]：") + edetail);
+                            if (eok) tryLoad(glibE, "G11[癸4 donor主程式自產]");
+                        } else {
+                            line("G11[癸4]：複製 lld 產出失敗");
+                        }
+                    }
                     } else {
                         line("G[乙]：dylib 不存在，跳過補簽");
                     }
