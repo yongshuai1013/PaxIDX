@@ -12,6 +12,8 @@ struct CodeEditorView: UIViewRepresentable {
     @Binding var text: String
     /// highlight.js 語言名（c／cpp／objectivec／swift），由檔案副檔名決定
     var language: String = "cpp"
+    /// 預覽用途可關編輯（設定頁主題預覽）
+    var editable: Bool = true
     var font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
 
     func makeCoordinator() -> Coordinator {
@@ -24,6 +26,7 @@ struct CodeEditorView: UIViewRepresentable {
         textView.font = context.coordinator.currentFont()
         textView.backgroundColor = .systemBackground
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+        textView.isEditable = editable
         textView.autocapitalizationType = .none
         textView.autocorrectionType = .no
         // 雙指縮放：改字體大小（值存 UserDefaults）
@@ -43,6 +46,9 @@ struct CodeEditorView: UIViewRepresentable {
             uiView.text = text
             context.coordinator.applyHighlight()
             uiView.refreshGutterWidth()
+        } else if context.coordinator.themeIsStale(for: uiView) {
+            // 在設定頁改了主題、回到已開著的編輯器：直接換色不用重開
+            context.coordinator.applyHighlight()
         }
     }
 
@@ -86,6 +92,12 @@ struct CodeEditorView: UIViewRepresentable {
             (textView as? EditorTextView)?.refreshGutterWidth()
         }
 
+        func themeIsStale(for tv: UITextView) -> Bool {
+            if appliedThemeName.isEmpty { return false }
+            let dark = tv.traitCollection.userInterfaceStyle == .dark
+            return EditorThemeStore.resolved(dark: dark) != appliedThemeName
+        }
+
         private var highlighter: Highlightr?
         private var appliedThemeName = ""
         private var appliedFontSize: CGFloat = -1
@@ -98,9 +110,9 @@ struct CodeEditorView: UIViewRepresentable {
             if highlighter == nil { highlighter = Highlightr() }
             var result: NSAttributedString?
             if let hl = highlighter {
-                // 主題隨深淺色（xcode 亮／xcode-dark 暗）；換主題或字級才重設，避免每鍵重解析 CSS
+                // 主題：設定頁選的 Highlightr 主題；「跟隨系統」才依深淺色配 xcode／xcode-dark
                 let dark = tv.traitCollection.userInterfaceStyle == .dark
-                let themeName = dark ? "xcode-dark" : "xcode"
+                let themeName = EditorThemeStore.resolved(dark: dark)
                 if themeName != appliedThemeName {
                     _ = hl.setTheme(to: themeName)
                     appliedThemeName = themeName
@@ -111,6 +123,10 @@ struct CodeEditorView: UIViewRepresentable {
                     appliedFontSize = fontSize
                 }
                 result = hl.highlight(code, as: parent.language)
+                // 編輯器背景跟主題走（深色主題配淺底會沒法看）
+                if result != nil, let bg = hl.theme.themeBackgroundColor {
+                    tv.backgroundColor = bg
+                }
             }
             if let result = result {
                 // 主題自帶的 .hljs 背景色不用：編輯器背景維持 systemBackground
@@ -127,6 +143,19 @@ struct CodeEditorView: UIViewRepresentable {
             tv.selectedRange = selectedRange
             isHighlighting = false
         }
+    }
+}
+
+/// 編輯器主題偏好（設定頁與編輯器共用）：存 Highlightr 主題名；"auto" 為跟隨系統。
+enum EditorThemeStore {
+    static let key = "paxidx.editor.theme"
+    static let auto = "auto"
+    static var selected: String {
+        UserDefaults.standard.string(forKey: key) ?? auto
+    }
+    static func resolved(dark: Bool) -> String {
+        let sel = selected
+        return sel == auto ? (dark ? "xcode-dark" : "xcode") : sel
     }
 }
 
@@ -159,8 +188,8 @@ final class EditorTextView: UITextView {
         let inset = textContainerInset
         let visible = CGRect(origin: contentOffset, size: bounds.size)
 
-        // gutter 背景
-        UIColor.secondarySystemBackground.setFill()
+        // gutter 背景：跟編輯器底色（主題色）一致，避免深色主題露淺色條
+        (backgroundColor ?? .secondarySystemBackground).setFill()
         UIRectFill(CGRect(x: visible.minX, y: visible.minY,
                           width: gutterWidth, height: visible.height))
 
