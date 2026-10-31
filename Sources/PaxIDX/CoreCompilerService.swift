@@ -66,7 +66,12 @@ enum CoreCompilerService {
                      "-D__GNUC__=4", "-D__GNUC_MINOR__=2", "-D__GNUC_PATCHLEVEL__=1",
                      "-fblocks", "-fobjc-runtime=ios-15.0"]
         }
-        if isCpp { args += ["-std=c++17"] }
+        if isCpp {
+            // 逐檔 -cc1 路（混 Swift 專案）沒有 driver 幫忙展開路徑，
+            // libc++ 頭檔位置要自己給（driver 路會自動處理）
+            args += ["-internal-isystem", sdk.appendingPathComponent("usr/include/c++/v1").path,
+                     "-std=c++17"]
+        }
         args += ["-o", object.path, "-x",
                  isObjC ? (ext == "mm" ? "objective-c++" : "objective-c") : (isCpp ? "c++" : "c"),
                  source.path]
