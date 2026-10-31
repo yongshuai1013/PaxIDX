@@ -5,6 +5,8 @@ struct AISettingsView: View {
     private enum Preset: String, CaseIterable, Identifiable {
         case deepseek = "DeepSeek"
         case openai = "OpenAI"
+        case pollinations = "Pollinations（免 key）"
+        case llm7 = "LLM7（免 key）"
         case custom = "自訂"
         var id: String { rawValue }
     }
@@ -15,6 +17,11 @@ struct AISettingsView: View {
     @State private var apiKey = ""
     @State private var status = ""
     @State private var testing = false
+
+    private var endpointIsKeyless: Bool {
+        guard let host = URL(string: endpoint)?.host else { return false }
+        return host.contains("pollinations.ai") || host.contains("llm7.io")
+    }
 
     var body: some View {
         Form {
@@ -37,6 +44,11 @@ struct AISettingsView: View {
                 Text("key 只存本機 Keychain；呼叫時只送往你填的端點")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if endpointIsKeyless {
+                    Text("此服務免 key，API key 欄可以留空")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             Section {
                 Button("儲存") {
@@ -44,7 +56,7 @@ struct AISettingsView: View {
                     status = "已儲存"
                 }
                 Button(testing ? "測試中…" : "測試連線") { test() }
-                    .disabled(testing || apiKey.isEmpty)
+                    .disabled(testing || (apiKey.isEmpty && !endpointIsKeyless))
                 if !status.isEmpty {
                     Text(status)
                         .font(.caption)
@@ -53,6 +65,9 @@ struct AISettingsView: View {
             }
             Section(header: Text("說明")) {
                 Text("在專案頁點「AI 助手」開啟對話。對話會帶入專案源文件與最近一次編譯日誌作為上下文，幫忙解讀編譯錯誤、給修改建議。")
+                Text("Pollinations 與 LLM7 是免 key 預設，免註冊可直接用；Pollinations 模型較弱，LLM7 匿名有限額、同時只能一個請求，模型偶爾會暫時不可用。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -70,6 +85,10 @@ struct AISettingsView: View {
             preset = .deepseek
         } else if endpoint == "https://api.openai.com/v1/chat/completions" {
             preset = .openai
+        } else if endpoint == "https://text.pollinations.ai/openai/chat/completions" {
+            preset = .pollinations
+        } else if endpoint == "https://api.llm7.io/v1/chat/completions" {
+            preset = .llm7
         } else {
             preset = .custom
         }
@@ -83,6 +102,12 @@ struct AISettingsView: View {
         case .openai:
             endpoint = "https://api.openai.com/v1/chat/completions"
             model = "gpt-4o-mini"
+        case .pollinations:
+            endpoint = "https://text.pollinations.ai/openai/chat/completions"
+            model = "openai-fast"
+        case .llm7:
+            endpoint = "https://api.llm7.io/v1/chat/completions"
+            model = "GLM-5.3-Flash"
         case .custom:
             break
         }
