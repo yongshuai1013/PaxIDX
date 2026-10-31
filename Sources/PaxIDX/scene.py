@@ -3,8 +3,13 @@
 # （world 容器做了 y 翻轉），z_rotation 與 SpriteKit 同向（正值逆時針）。
 # 目標相容範圍：Node／ShapeNode／LabelNode／Scene／run——夠跑
 # Pythonista 的 AnalogClock.py 這類範例。
+from collections import namedtuple
+
 import _paxscene
 import ui  # noqa: F401  （讓 from scene import * 的程式能直接用 ui.Path）
+
+Size = namedtuple('Size', ('w', 'h'))
+Point = namedtuple('Point', ('x', 'y'))
 
 _NAMED_COLORS = {
     'black': (0, 0, 0, 1), 'white': (1, 1, 1, 1), 'red': (1, 0, 0, 1),
@@ -60,6 +65,9 @@ class Node:
         self._z_rotation = 0.0
         self._alpha = 1.0
         _paxscene.view_set_anchor(self._view, 0.5, 0.5)
+        # 先把預設位置推給 C 橋存著：position 常在 add_child 之前設定，
+        # C 橋要在入樹時按父節點原點補上偏移（見 PySceneBridge）
+        _paxscene.view_set_position(self._view, 0.0, 0.0)
 
     # --- 樹 ---
     @property
@@ -86,7 +94,7 @@ class Node:
     # --- 幾何與外觀 ---
     @property
     def position(self):
-        return self._position
+        return Point(*self._position)
 
     @position.setter
     def position(self, value):
@@ -210,6 +218,9 @@ class Scene(Node):
     def __init__(self):
         super().__init__()
         self._world_node = Node()
+        # world 原點＝畫面左下角（Pythonista 場景座標）：anchor 設 (0,0)，
+        # C 橋佈局時把它的 position 釘在左下角並做 y 翻轉
+        self._world_node.anchor_point = (0, 0)
         _paxscene.view_flip_y(self._world_node._view)
         _paxscene.view_add_child(self._view, self._world_node._view)
         self._background_color = 'black'
@@ -223,7 +234,7 @@ class Scene(Node):
 
     @property
     def size(self):
-        return _paxscene.screen_size()
+        return Size(*_paxscene.screen_size())
 
     @property
     def background_color(self):

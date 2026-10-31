@@ -92,11 +92,28 @@ static PyObject *view_create(PyObject *self, PyObject *args) {
     });
     return PyLong_FromLong([regAdd(v) longValue]);
 }
+// Python 側 position 存儲：節點常在 add_child 之前就設 position，
+// 入樹時要按父節點原點（父 anchor 在其 bounds 的落點）補偏移再套用
+static NSMutableDictionary<id, NSValue *> *gPos = nil;
+static void applyStoredPosition(UIView *v) {
+    NSValue *pv = gPos[v];
+    if (pv == nil || v.superview == nil) return;
+    CGPoint p = [pv CGPointValue];
+    UIView *sv = v.superview;
+    CGPoint off = CGPointMake(sv.layer.anchorPoint.x * sv.bounds.size.width,
+                              sv.layer.anchorPoint.y * sv.bounds.size.height);
+    v.center = CGPointMake(off.x + p.x, off.y + p.y);
+}
 static PyObject *view_set_position(PyObject *self, PyObject *args) {
     PyObject *h; double x, y;
     if (!PyArg_ParseTuple(args, "Odd", &h, &x, &y)) return NULL;
     UIView *v = regGet(h);
-    onMainSync(^{ if (v) v.center = CGPointMake(x, y); });
+    onMainSync(^{
+        if (!v) return;
+        if (gPos == nil) gPos = [NSMutableDictionary dictionary];
+        gPos[v] = [NSValue valueWithCGPoint:CGPointMake(x, y)];
+        applyStoredPosition(v);
+    });
     Py_RETURN_NONE;
 }
 static PyObject *view_set_anchor(PyObject *self, PyObject *args) {
@@ -124,7 +141,12 @@ static PyObject *view_add_child(PyObject *self, PyObject *args) {
     PyObject *hp, *hc;
     if (!PyArg_ParseTuple(args, "OO", &hp, &hc)) return NULL;
     UIView *p = regGet(hp), *c = regGet(hc);
-    onMainSync(^{ if (p && c) [p addSubview:c]; });
+    onMainSync(^{
+        if (p && c) {
+            [p addSubview:c];
+            applyStoredPosition(c); // 入樹後按父原點補偏移套用已存的 position
+        }
+    });
     Py_RETURN_NONE;
 }
 static PyObject *view_remove_from_parent(PyObject *self, PyObject *args) {
@@ -328,7 +350,7 @@ static PXSceneTicker *gTicker = nil;
     CGSize sz = self.view.bounds.size;
     if (gWorldView != nil) {
         gWorldView.bounds = CGRectMake(0, 0, sz.width, sz.height);
-        gWorldView.layer.position = CGPointMake(sz.width / 2, sz.height / 2);
+        gWorldView.layer.position = CGPointMake(0, sz.height);
     }
     BOOL changed = !CGSizeEqualToSize(sz, gSceneSize) && gSceneSize.width != 0;
     gSceneSize = sz;
