@@ -71,6 +71,7 @@ struct NewProjectView: View {
     @State private var bundleID = ""
     @State private var installedSDKs: [PaxSDKStore.InstalledSDK] = []
     @State private var selectedSDKFolder = ""
+    @State private var projectKind = "c"
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var activeProject: Project?
@@ -83,6 +84,14 @@ struct NewProjectView: View {
                     TextField("Bundle ID（可空，自動生成）", text: $bundleID)
                         .autocapitalization(.none)
                         .disableAutocorrection(true)
+                }
+                Section(header: Text("專案類型")) {
+                    Picker("類型", selection: $projectKind) {
+                        Text("C").tag("c")
+                        Text("C++").tag("cpp")
+                        Text("Objective-C++").tag("mm")
+                    }
+                    .pickerStyle(.menu)
                 }
                 Section(header: Text("編譯 SDK")) {
                     if installedSDKs.isEmpty {
@@ -103,7 +112,7 @@ struct NewProjectView: View {
                         do {
                             let bid = bundleID.isEmpty ? "com.example.\(name)" : bundleID
                             try ProjectFiles.createProject(name: name, bundleID: bid,
-                                                           sdkFolder: selectedSDKFolder.isEmpty ? nil : selectedSDKFolder)
+                                                           sdkFolder: selectedSDKFolder.isEmpty ? nil : selectedSDKFolder, kind: projectKind)
                             presentationMode.wrappedValue.dismiss()
                         } catch {
                             errorMessage = error.localizedDescription
