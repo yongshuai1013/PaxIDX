@@ -18,74 +18,58 @@ let _testError: Error = TestLocalizedError.testFailure
 
 /// 設定頁：SDK 下載 + 實驗 + 關於 + 檔案管理
 struct SettingsView: View {
+    // 列右側的現況值（照 Apelin 設定頁的 value 列法：不用點進去就知道現況）
+    @AppStorage("paxidx.editor.theme") private var editorTheme = "auto"
+    @AppStorage("ai.model") private var aiModelStored = ""
+
     var body: some View {
         NavigationView {
             List {
+                // 分區照 Apelin 的域邏輯收斂：編輯器／開發環境／AI／工具／關於
+                // 列只留名稱＋右側現況值，說明文字不再逐列掛 caption（舊版亂的主因）
                 Section(header: Text("編輯器")) {
-                    NavigationLink(destination: EditorSettingsView()) {
-                        Text("編輯器主題")
-                    }
-                    Text("程式碼高亮主題：跟隨系統，或 Highlightr 全部內建主題擇一（附即時預覽）")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    navRow("編輯器主題",
+                           detail: editorTheme == "auto" ? "跟隨系統" : editorTheme,
+                           destination: EditorSettingsView())
                 }
-                Section(header: Text("SDK")) {
-                    NavigationLink(destination: SDKDownloadView()) {
-                        Text("下載 SDK")
-                    }
-                    Text("編譯用的 SDK（26／27 世代並存）從 GitHub release 下載解壓；用哪一版在建立專案時選擇")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Section(header: Text("實驗")) {
-                    NavigationLink(destination: NyxLoadTestView()) {
-                        Text("Nyxian CoreCompiler 載入實測")
-                    }
-                    Text("自編 CoreCompiler（Swift 6.4）的載入與試編實測頁")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Section(header: Text("簽名")) {
-                    NavigationLink(destination: CertSignView()) {
-                        Text("簽名證書（導入＋真簽名）")
-                    }
-                    Text("導入開發者證書（.p12）與描述檔，產出改用證書真簽名（照 ZSign 作法）")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                Section(header: Text("開發環境")) {
+                    navRow("下載 SDK", destination: SDKDownloadView())
+                    navRow("簽名證書", destination: CertSignView())
                 }
                 Section(header: Text("AI")) {
-                    NavigationLink(destination: AISettingsView()) {
-                        Text("AI 助手設定")
-                    }
-                    Text("自帶 API key（BYOK）：在專案頁開 AI 對話，帶入專案檔案與編譯日誌解讀錯誤")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    navRow("AI 助手設定", detail: AIConfig.model,
+                           destination: AISettingsView())
                 }
-                Section(header: Text("關於")) {
+                Section(header: Text("工具")) {
+                    navRow("瀏覽 App 文件", destination: FileBrowserView())
+                    navRow("Nyxian CoreCompiler 載入實測", destination: NyxLoadTestView())
+                }
+                Section(header: Text("關於"),
+                        footer: Text("在 iPhone 上編譯 iOS App（iOS 15+）")) {
                     HStack {
                         Text("版本")
                         Spacer()
                         Text("0.1.0")
                             .foregroundColor(.secondary)
                     }
-                    Text("在 iPhone 上編譯 iOS App（iOS 15+）")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Section(header: Text("檔案管理")) {
-                    NavigationLink(destination: FileBrowserView()) {
-                        HStack {
-                            Image(systemName: "folder.fill")
-                                .foregroundColor(.accentColor)
-                            Text("瀏覽 App 文件")
-                        }
-                    }
-                    Text("SDK、專案、構建產物都在這裡")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("設定")
+        }
+    }
+
+    /// 統一列型：名稱靠左、現況值靠右（次要色）、箭頭由 NavigationLink 自帶
+    private func navRow<Destination: View>(_ title: String, detail: String? = nil,
+                                           destination: Destination) -> some View {
+        NavigationLink(destination: destination) {
+            HStack {
+                Text(title)
+                Spacer()
+                if let detail = detail {
+                    Text(detail)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
     }
 }
