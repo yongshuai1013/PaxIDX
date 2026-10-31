@@ -143,14 +143,17 @@ static PyObject *view_flip_y(PyObject *self, PyObject *args) {
 }
 
 // ---- 顏色 ----
-static BOOL parseRGBA(PyObject *o, CGFloat rgba[4]) {
+struct PXRgba { CGFloat r, g, b, a; };
+static BOOL parseRGBA(PyObject *o, PXRgba &out) {
     if (o == Py_None) return NO;
     if (!PyTuple_Check(o) || PyTuple_Size(o) != 4) return NO;
-    for (int i = 0; i < 4; i++) rgba[i] = PyFloat_AsDouble(PyTuple_GetItem(o, i));
+    CGFloat v[4];
+    for (int i = 0; i < 4; i++) v[i] = PyFloat_AsDouble(PyTuple_GetItem(o, i));
+    out = {v[0], v[1], v[2], v[3]};
     return YES;
 }
-static UIColor *colorFromRGBA(const CGFloat rgba[4]) {
-    return [UIColor colorWithRed:rgba[0] green:rgba[1] blue:rgba[2] alpha:rgba[3]];
+static UIColor *colorFromRGBA(const PXRgba &c) {
+    return [UIColor colorWithRed:c.r green:c.g blue:c.b alpha:c.a];
 }
 
 // ---- Shape ----
@@ -159,7 +162,7 @@ static PyObject *shape_set(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OOOOd", &h, &ph, &fill, &stroke, &lw)) return NULL;
     PXShapeView *v = regGet(h);
     UIBezierPath *p = regGet(ph);
-    CGFloat fr[4], sr[4];
+    PXRgba fr, sr;
     BOOL hasFill = parseRGBA(fill, fr), hasStroke = parseRGBA(stroke, sr);
     onMainSync(^{
         if (!v || !p) return;
@@ -176,12 +179,12 @@ static PyObject *shape_set_shadow(PyObject *self, PyObject *args) {
     PyObject *h, *col; double dx, dy, blur;
     if (!PyArg_ParseTuple(args, "OOddd", &h, &col, &dx, &dy, &blur)) return NULL;
     UIView *v = regGet(h);
-    CGFloat rgba[4];
+    PXRgba rgba;
     if (!parseRGBA(col, rgba)) Py_RETURN_NONE;
     onMainSync(^{
         if (!v) return;
         v.layer.shadowColor = colorFromRGBA(rgba).CGColor;
-        v.layer.shadowOpacity = (float)rgba[3];
+        v.layer.shadowOpacity = (float)rgba.a;
         v.layer.shadowOffset = CGSizeMake(dx, dy);
         v.layer.shadowRadius = blur;
     });
@@ -194,7 +197,7 @@ static PyObject *label_set(PyObject *self, PyObject *args) {
     const char *text, *fontName; double size;
     if (!PyArg_ParseTuple(args, "OssdO", &h, &text, &fontName, &size, &col)) return NULL;
     PXLabelView *v = regGet(h);
-    CGFloat rgba[4];
+    PXRgba rgba;
     BOOL hasCol = parseRGBA(col, rgba);
     NSString *nsText = [NSString stringWithUTF8String:text];
     NSString *nsFont = [NSString stringWithUTF8String:fontName];
@@ -223,7 +226,7 @@ static PyObject *label_set_color(PyObject *self, PyObject *args) {
     PyObject *h, *col;
     if (!PyArg_ParseTuple(args, "OO", &h, &col)) return NULL;
     PXLabelView *v = regGet(h);
-    CGFloat rgba[4];
+    PXRgba rgba;
     if (!parseRGBA(col, rgba)) Py_RETURN_NONE;
     onMainSync(^{ if (v && v.label) v.label.textColor = colorFromRGBA(rgba); });
     Py_RETURN_NONE;
@@ -400,7 +403,7 @@ static PyObject *scene_present(PyObject *self, PyObject *args) {
 static PyObject *scene_set_bg(PyObject *self, PyObject *args) {
     PyObject *h, *col;
     if (!PyArg_ParseTuple(args, "OO", &h, &col)) return NULL;
-    CGFloat rgba[4];
+    PXRgba rgba;
     if (!parseRGBA(col, rgba)) Py_RETURN_NONE;
     onMainSync(^{
         gPendingBG = colorFromRGBA(rgba);
