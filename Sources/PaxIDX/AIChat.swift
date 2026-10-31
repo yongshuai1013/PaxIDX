@@ -93,8 +93,7 @@ enum AIChatClient {
         case badResponse
 
         var errorDescription: String? {
-            switch
-...[truncated 3747 chars] self {
+            switch self {
             case .notConfigured: return "尚未設定 API key"
             case .badURL: return "端點 URL 不正確"
             case .http(let code, let body): return "HTTP \(code)：\(String(body.prefix(300)))"
