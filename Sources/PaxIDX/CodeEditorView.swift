@@ -294,7 +294,7 @@ extension CodeEditorView.Coordinator {
         pool.formUnion(parent.completionVocabulary)
         pool.formUnion(CompletionVocab.identifiers(in: tv.text ?? ""))
         let lower = prefix.lowercased()
-        var hits = pool.filter { $0.lowercased().hasPrefix(lower) && $0 != prefix }
+        var hits = Array(pool.filter { $0.lowercased().hasPrefix(lower) && $0 != prefix })
         hits.sort { ($0.count, $0.lowercased()) < ($1.count, $1.lowercased()) }
         setBar(tv, Array(hits.prefix(12)))
     }
