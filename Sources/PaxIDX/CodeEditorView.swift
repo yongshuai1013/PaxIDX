@@ -108,9 +108,9 @@ final class LineNumberGutterView: UIView {
     var numberColor: UIColor = .systemGray
 
     override func draw(_ rect: CGRect) {
-        guard let tv = textView,
-              let lm = tv.layoutManager,
-              let tc = tv.textContainer else { return }
+        guard let tv = textView else { return }
+        let lm = tv.layoutManager
+        let tc = tv.textContainer
         lm.ensureLayout(for: tc)
         let ns = tv.text as NSString
         let inset = tv.textContainerInset
