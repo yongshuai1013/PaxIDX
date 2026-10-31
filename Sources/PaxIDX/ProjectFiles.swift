@@ -51,7 +51,7 @@ final class ProjectFiles {
     }
 
     /// 新建項目：建目錄 + 寫 project.json + 放一個 main.c 範例
-    static func createProject(name: String, bundleID: String, sdkFolder: String? = nil) throws {
+    static func createProject(name: String, bundleID: String, sdkFolder: String? = nil, kind: String = "c") throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.contains("/") else { throw ProjectError.invalidName }
         let dir = directory(for: trimmed)
@@ -60,9 +60,21 @@ final class ProjectFiles {
         let project = Project(name: trimmed, bundleID: bundleID, sdkFolder: sdkFolder)
         let data = try JSONEncoder().encode(project)
         try data.write(to: dir.appendingPathComponent("project.json"))
-        // 放一個最小可編譯的 main.c 範例
-        let sample = "#include <stdio.h>\nint main() { printf(\"Hello, PaxIDX!\\n\"); return 0; }\n"
-        try sample.write(to: sourcesDirectory(for: trimmed).appendingPathComponent("main.c"), atomically: true, encoding: .utf8)
+        // 放一個最小可編譯的範例（依專案類型）
+        let sampleName: String
+        let sample: String
+        switch kind {
+        case "cpp":
+            sampleName = "main.cpp"
+            sample = "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, PaxIDX!\" << std::endl;\n    return 0;\n}\n"
+        case "mm":
+            sampleName = "main.mm"
+            sample = "#import <Foundation/Foundation.h>\n#include <string>\n#include <iostream>\n\nint main(int argc, char *argv[]) {\n    @autoreleasepool {\n        std::string who = \"PaxIDX\";\n        std::cout << \"Hello from \" << who << std::endl;\n        NSLog(@\"Hello from %s\", who.c_str());\n    }\n    return 0;\n}\n"
+        default:
+            sampleName = "main.c"
+            sample = "#include <stdio.h>\nint main() { printf(\"Hello, PaxIDX!\\n\"); return 0; }\n"
+        }
+        try sample.write(to: sourcesDirectory(for: trimmed).appendingPathComponent(sampleName), atomically: true, encoding: .utf8)
     }
 
     /// 更新項目的 SDK 選擇（寫回 project.json）
