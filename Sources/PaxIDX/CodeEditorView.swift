@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// 代碼編輯器：行號＋C 語法高亮（iOS 15 可用）
-/// 行號欄改自繪：照主編輯區 layoutManager 的 line fragment 位置逐行畫，
-/// 跟著捲動重畫。舊做法拿第二個 UITextView 裝全部行號再同步
-/// contentOffset——它關了捲動，offset 會被系統夾掉、超出畫面的行
-/// 根本不排版，就是「滑下去行號不見／點一下冒出錯位行號」的病根。
+/// 行號改畫在 UITextView 子類自己的 draw 裡（Forge 等現成編輯器的通行做法）：
+/// 號碼與文字同一個 view、同一個座標系、同一次繪製，天生跟著內容捲動。
+/// 前兩版都栽在「分離的 gutter view」：第一版拿關捲動的 UITextView 同步
+/// offset 被系統夾掉；第二版自繪 view 在自己的繪製時機采样主 view 的
+/// contentOffset 與排版，兩者世代不一致時行號就增減漂移（實測同段代碼
+/// 兩張截圖行距編號都不同）。本版廢掉分離 gutter，inset 左側即號碼欄。
 struct CodeEditorView: UIViewRepresentable {
     @Binding var text: String
     var font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
@@ -13,65 +15,37 @@ struct CodeEditorView: UIViewRepresentable {
         Coordinator(self)
     }
 
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-
-        // 行號欄（自繪 view，不再是文字視圖）
-        let gutter = LineNumberGutterView()
-        gutter.numberFont = context.coordinator.currentFont()
-        gutter.backgroundColor = .systemBackground
-        gutter.translatesAutoresizingMaskIntoConstraints = false
-
-        // 主編輯區
-        let textView = UITextView()
+    func makeUIView(context: Context) -> EditorTextView {
+        let textView = EditorTextView()
         textView.delegate = context.coordinator
         textView.font = context.coordinator.currentFont()
-        // 雙指縮放：改字體大小（行號欄同步，值存 UserDefaults）
-        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
-                                             action: #selector(Coordinator.handlePinch(_:)))
-        textView.addGestureRecognizer(pinch)
         textView.backgroundColor = .systemBackground
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         textView.autocapitalizationType = .none
         textView.autocorrectionType = .no
-        textView.translatesAutoresizingMaskIntoConstraints = false
+        // 雙指縮放：改字體大小（值存 UserDefaults）
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handlePinch(_:)))
+        textView.addGestureRecognizer(pinch)
 
-        gutter.textView = textView
-        container.addSubview(gutter)
-        container.addSubview(textView)
-
-        NSLayoutConstraint.activate([
-            gutter.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            gutter.topAnchor.constraint(equalTo: container.topAnchor),
-            gutter.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            gutter.widthAnchor.constraint(equalToConstant: 44),
-
-            textView.leadingAnchor.constraint(equalTo: gutter.trailingAnchor),
-            textView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            textView.topAnchor.constraint(equalTo: container.topAnchor),
-            textView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        context.coordinator.gutter = gutter
         context.coordinator.textView = textView
         context.coordinator.applyHighlight()
-
-        return container
+        textView.refreshGutterWidth()
+        return textView
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(_ uiView: EditorTextView, context: Context) {
         // 外部 text 變化時更新（避免循環）
-        if context.coordinator.textView?.text != text {
-            context.coordinator.textView?.text = text
+        if uiView.text != text {
+            uiView.text = text
             context.coordinator.applyHighlight()
-            context.coordinator.gutter?.setNeedsDisplay()
+            uiView.refreshGutterWidth()
         }
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditorView
-        weak var gutter: LineNumberGutterView?
-        weak var textView: UITextView?
+        weak var textView: EditorTextView?
         private var isHighlighting = false
         private(set) var fontSize: CGFloat
         private var pinchStartSize: CGFloat = 14
@@ -98,24 +72,15 @@ struct CodeEditorView: UIViewRepresentable {
             fontSize = size
             UserDefaults.standard.set(Double(size), forKey: "paxidx.editor.fontSize")
             textView?.font = currentFont()
-            gutter?.numberFont = currentFont()
             applyHighlight()
-            gutter?.setNeedsDisplay()
+            textView?.refreshGutterWidth()
         }
 
         func textViewDidChange(_ textView: UITextView) {
             if isHighlighting { return }
             parent.text = textView.text
             applyHighlight()
-            gutter?.setNeedsDisplay()
-        }
-
-        func textViewDidChangeSelection(_ textView: UITextView) {
-            gutter?.setNeedsDisplay()
-        }
-
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            gutter?.setNeedsDisplay()
+            (textView as? EditorTextView)?.refreshGutterWidth()
         }
 
         func applyHighlight() {
@@ -130,54 +95,88 @@ struct CodeEditorView: UIViewRepresentable {
     }
 }
 
-/// 行號欄：依主編輯區每個 line fragment 的實際位置畫行號。
-/// 自動換行造成的續行 fragment 不畫號（只在邏輯行首畫），與一般編輯器一致。
-final class LineNumberGutterView: UIView {
-    weak var textView: UITextView?
-    var numberFont: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
-    var numberColor: UIColor = .systemGray
+/// 編輯器本體：行號畫在自己的 draw 裡，gutter 欄就是 textContainerInset 的左側空間。
+final class EditorTextView: UITextView {
+    private(set) var gutterWidth: CGFloat = 0
+
+    /// 依總行數位數與字體大小算 gutter 寬，同步左 inset
+    func refreshGutterWidth() {
+        let lineCount = max(1, text.reduce(into: 1) { n, c in if c == "\n" { n += 1 } })
+        let digits = CGFloat(max(2, String(lineCount).count))
+        let w = digits * (font?.pointSize ?? 14) * 0.62 + 14
+        if abs(w - gutterWidth) > 0.5 {
+            gutterWidth = w
+            textContainerInset.left = w + 4
+        }
+        setNeedsDisplay()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        setNeedsDisplay()   // 捲動時重畫行號（與 Forge 同法）
+    }
 
     override func draw(_ rect: CGRect) {
-        guard let tv = textView else { return }
-        let lm = tv.layoutManager
-        let tc = tv.textContainer
-        lm.ensureLayout(for: tc)
-        let ns = tv.text as NSString
-        let inset = tv.textContainerInset
-        // 可見範圍換算到 text container 座標
-        let visible = CGRect(x: 0, y: tv.contentOffset.y - inset.top,
-                             width: tc.size.width, height: tv.bounds.height)
-        let glyphRange = lm.glyphRange(forBoundingRect: visible, in: tc)
-        if glyphRange.length == 0 { return }
-        // 第一個可見字元的邏輯行號（前面的換行數＋1）
-        let firstChar = lm.characterIndexForGlyph(at: glyphRange.location)
-        var lineNumber = 1
-        if firstChar > 0 {
-            lineNumber = ns.substring(to: firstChar)
-                .components(separatedBy: "\n").count
-        }
+        super.draw(rect)
+        guard gutterWidth > 0, let font = font else { return }
+        let lm = layoutManager
+        let tc = textContainer
+        let inset = textContainerInset
+        let visible = CGRect(origin: contentOffset, size: bounds.size)
+
+        // gutter 背景
+        UIColor.secondarySystemBackground.setFill()
+        UIRectFill(CGRect(x: visible.minX, y: visible.minY,
+                          width: gutterWidth, height: visible.height))
+
+        let ns = text as NSString
+        let area = CGRect(x: visible.minX - inset.left, y: visible.minY - inset.top,
+                          width: tc.size.width, height: visible.height)
+        let glyphs = lm.glyphRange(forBoundingRect: area, in: tc)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: numberFont, .foregroundColor: numberColor,
+            .font: font, .foregroundColor: UIColor.systemGray,
         ]
-        var isFirstFragment = true
-        lm.enumerateLineFragments(forGlyphRange: glyphRange) {
-            _, usedRect, _, fragGlyphRange, _ in
-            let charIndex = lm.characterIndexForGlyph(at: fragGlyphRange.location)
-            let isLineStart = charIndex == 0
-                || (charIndex > 0 && ns.character(at: charIndex - 1) == 10)
-            if isLineStart {
-                if !isFirstFragment { lineNumber += 1 }
-                let s = "\(lineNumber)" as NSString
-                let size = s.size(withAttributes: attrs)
-                let y = usedRect.minY + inset.top - tv.contentOffset.y
-                    + (usedRect.height - size.height) / 2
-                s.draw(at: CGPoint(x: self.bounds.width - size.width - 6, y: y),
-                       withAttributes: attrs)
+
+        func drawNumber(_ n: Int, frag: CGRect) {
+            let s = "\(n)" as NSString
+            let sz = s.size(withAttributes: attrs)
+            s.draw(at: CGPoint(x: visible.minX + gutterWidth - 6 - sz.width,
+                               y: frag.minY + inset.top + (frag.height - sz.height) / 2),
+                   withAttributes: attrs)
+        }
+
+        if glyphs.length > 0 {
+            // 第一個可見字元之前的換行數定起算行號：
+            // 若它正好在行首，下一個行首 fragment 就是這一行；
+            // 若它在行中（上方有被捲出的續行），下一個行首要再 +1。
+            let first = lm.characterIndexForGlyph(at: glyphs.location)
+            var newlines = 0
+            var i = 0
+            while i < first { if ns.character(at: i) == 10 { newlines += 1 }; i += 1 }
+            let firstIsStart = first == 0 || ns.character(at: first - 1) == 10
+            var lineNo = newlines + (firstIsStart ? 1 : 2)
+            lm.enumerateLineFragments(forGlyphRange: glyphs) { frag, _, _, gr, _ in
+                let ci = lm.characterIndexForGlyph(at: gr.location)
+                if ci == 0 || ns.character(at: ci - 1) == 10 {
+                    drawNumber(lineNo, frag: frag)
+                    lineNo += 1
+                }
             }
-            isFirstFragment = false
+        }
+
+        // 結尾換行後的額外空行也要有號
+        let extra = lm.extraLineFragmentRect
+        if extra.height > 0 {
+            let r = CGRect(x: extra.minX + inset.left, y: extra.minY + inset.top,
+                           width: extra.width, height: extra.height)
+            if r.intersects(visible) {
+                let total = text.reduce(into: 1) { n, c in if c == "\n" { n += 1 } }
+                drawNumber(ns.length == 0 ? 1 : total, frag: extra)
+            }
         }
     }
 }
+
 /// 簡單 C 高亮：關鍵字／字串／註釋／預處理／數字
 private enum CHighlighter {
     static let keywords: Set<String> = [
