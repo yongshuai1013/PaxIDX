@@ -1,0 +1,52 @@
+name: build-python-runtime
+on:
+  workflow_dispatch:
+jobs:
+  runtime:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下載 BeeWare CPython 3.13 iOS 支援包
+        run: |
+          curl -sL -o /tmp/py.tar.gz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          tar xzf /tmp/py.tar.gz Python.xcframework
+          ls Python.xcframework
+      - name: 安裝 XcodeGen
+        run: brew install xcodegen
+      - name: 構建通用宿主
+        run: |
+          cd PythonHost
+          xcodegen generate
+          xcodebuild -project PythonHost.xcodeproj -scheme PythonHost -configuration Release \
+            -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -derivedDataPath build build
+          otool -l build/Build/Products/Release-iphoneos/PythonHost.app/PythonHost | grep -A2 LC_RPATH || true
+      - name: 組裝 PaxPythonRuntime.zip
+        run: |
+          set -e
+          STAGE=$(mktemp -d)
+          cp PythonHost/build/Build/Products/Release-iphoneos/PythonHost.app/PythonHost "$STAGE/PythonHost"
+          chmod +x "$STAGE/PythonHost"
+          cp -r Python.xcframework/ios-arm64/Python.framework "$STAGE/Python.framework"
+          rm -rf "$STAGE/Python.framework/Headers" "$STAGE/Python.framework/_CodeSignature"
+          mkdir -p "$STAGE/python/lib"
+          rsync -a Python.xcframework/lib/python3.13 "$STAGE/python/lib/"
+          rsync -a Python.xcframework/ios-arm64/lib-arm64/python3.13/ "$STAGE/python/lib/python3.13/"
+          cp Python.xcframework/build/iOS-dylib-Info-template.plist "$STAGE/dylib-template.plist"
+          echo "3.13" > "$STAGE/VERSION"
+          du -sh "$STAGE"
+          (cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/PaxPythonRuntime.zip" .)
+          ls -la PaxPythonRuntime.zip
+      - name: 發布到 release paxpython-3.13
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view paxpython-3.13 >/dev/null 2>&1; then
+            gh release upload paxpython-3.13 PaxPythonRuntime.zip --clobber
+          else
+            gh release create paxpython-3.13 PaxPythonRuntime.zip \
+              --title "Python 3.13 執行環境（PaxIDX Python 專案用）" \
+              --notes "BeeWare Python-Apple-support 3.13-b18：通用宿主＋Python.framework＋完整標準庫。PaxIDX 設定頁下載。"
+          fi

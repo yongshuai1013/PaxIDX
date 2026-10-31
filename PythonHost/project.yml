@@ -1,0 +1,30 @@
+name: PythonHost
+options:
+  bundleIdPrefix: com.yongshuai
+deploymentTarget:
+  iOS: "15.0"
+targets:
+  PythonHost:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    dependencies:
+      # BeeWare CPython（workflow 下載解壓到 PaxIDX 專案根目錄）
+      - framework: ../Python.xcframework
+        embed: false
+    sources:
+      - path: main.m
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yongshuai.pythonhost
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: PythonHost
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSRequiresIPhoneOS: true
+        UIRequiredDeviceCapabilities:
+          - arm64
+        ITSAppUsesNonExemptEncryption: false
