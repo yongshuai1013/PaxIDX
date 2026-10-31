@@ -1,4 +1,5 @@
 import SwiftUI
+import Highlightr
 import UniformTypeIdentifiers
 
 // 測試 LocalizedError 是否導致 iOS 15 閃退
@@ -20,6 +21,14 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             List {
+                Section(header: Text("編輯器")) {
+                    NavigationLink(destination: EditorSettingsView()) {
+                        Text("編輯器主題")
+                    }
+                    Text("程式碼高亮主題：跟隨系統，或 Highlightr 全部內建主題擇一（附即時預覽）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Section(header: Text("SDK")) {
                     NavigationLink(destination: SDKDownloadView()) {
                         Text("下載 SDK")
@@ -365,6 +374,73 @@ struct FileBrowserView: View {
             message = "已貼上：\(destName)"
         } catch {
             message = "貼上失敗：\(error.localizedDescription)"
+        }
+    }
+}
+
+/// 編輯器主題設定：跟隨系統，或 Highlightr 全部內建主題擇一；上方釘住即時預覽。
+struct EditorSettingsView: View {
+    @AppStorage("paxidx.editor.theme") private var selectedTheme = "auto"
+    @State private var themes: [String] = []
+    @State private var query = ""
+    @State private var previewCode = """
+        #import <UIKit/UIKit.h>
+        #include <string>
+        // 主題預覽：註解
+        @interface Greeter : NSObject
+        @property (nonatomic, strong) NSString *name;
+        @end
+        @implementation Greeter
+        - (NSString *)message {
+            std::string who = "ObjC++";
+            return [NSString stringWithFormat:@"Hello, %s", who.c_str()];
+        }
+        @end
+        """
+
+    private var filteredThemes: [String] {
+        query.isEmpty ? themes
+            : themes.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 預覽釘在上方，捲主題清單時隨時對照
+            CodeEditorView(text: $previewCode, language: "objectivec", editable: false)
+                .frame(height: 210)
+                .id(selectedTheme)
+            Divider()
+            List {
+                Section(header: Text("主題（Highlightr 內建共 \(themes.count) 款）")) {
+                    themeRow(id: "auto", label: "跟隨系統（淺色 Xcode／深色 Xcode Dark）")
+                    ForEach(filteredThemes, id: \.self) { name in
+                        themeRow(id: name, label: name)
+                    }
+                }
+            }
+        }
+        .searchable(text: $query, prompt: "搜尋主題")
+        .navigationTitle("編輯器主題")
+        .onAppear {
+            if themes.isEmpty {
+                themes = Highlightr()?.availableThemes().sorted() ?? []
+            }
+        }
+    }
+
+    private func themeRow(id: String, label: String) -> some View {
+        Button {
+            selectedTheme = id
+        } label: {
+            HStack {
+                Text(label)
+                    .foregroundColor(.primary)
+                Spacer()
+                if selectedTheme == id {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.accentColor)
+                }
+            }
         }
     }
 }
