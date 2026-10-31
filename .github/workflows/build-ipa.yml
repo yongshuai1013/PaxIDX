@@ -60,6 +60,12 @@ jobs:
           unzip -o /tmp/toolchain-dylib.zip -d Vendor/NativeToolchain
           ls -la Vendor/NativeToolchain/
 
+      - name: 下載 BeeWare CPython 3.13（Python 預覽運行時）
+        run: |
+          curl -sL -o /tmp/py.tar.gz https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz
+          tar xzf /tmp/py.tar.gz Python.xcframework
+          ls Python.xcframework
+
       - name: 生成 Xcode 項目
         run: xcodegen generate
 
@@ -83,6 +89,10 @@ jobs:
             unzip -o -q /tmp/ccfw/CoreCompiler.framework.zip -d /tmp/ccfw/x
             ls -la /tmp/ccfw/x/CoreCompiler.framework/
             cp -R /tmp/ccfw/x/CoreCompiler.framework build/ipa/Payload/PaxIDX.app/Frameworks/
+            echo "內嵌 Python 預覽運行時：擴展模組 framework＋標準庫 python/"
+            python3 Support/make_python_embed.py Python.xcframework /tmp/pyembed
+            cp -R /tmp/pyembed/Frameworks/*.framework build/ipa/Payload/PaxIDX.app/Frameworks/
+            cp -R /tmp/pyembed/python build/ipa/Payload/PaxIDX.app/python
             echo "組 PaxSDK.zip（完整 SDK＋自編 res）"
             # SDK 換 Xcode 26 原生 iphoneos SDK（CI 機 Xcode 26.6 的 26.5 世代，
             # 與自編 6.4 前端同世代）；部署目標 15 由探針 -target 指定。

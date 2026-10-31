@@ -14,6 +14,19 @@ extension Array where Element == String {
     }
 }
 
+/// Python 預覽輸出行收集盒（C 回調 → Swift 閉包）
+final class PythonLogBox {
+    let onLine: (String) -> Void
+    init(onLine: @escaping (String) -> Void) { self.onLine = onLine }
+}
+
+/// Python 預覽 log 回調的 C 跳板（ctx 指向 PythonLogBox）
+private func paxidxPythonLogTrampoline(_ line: UnsafePointer<CChar>?, _ ctx: UnsafeMutableRawPointer?) {
+    guard let ctx = ctx else { return }
+    let box = Unmanaged<PythonLogBox>.fromOpaque(ctx).takeUnretainedValue()
+    if let line = line { box.onLine(String(cString: line)) }
+}
+
 /// 編譯頁：XForge 風格的文件瀏覽器
 struct BuildView: View {
     /// 手造 FORCE_LOAD 替身目標文件（Mach-O arm64 物件，22 個符號）的 base64
@@ -27,6 +40,8 @@ struct BuildView: View {
     @Environment(\.presentationMode) private var presentationMode
     @State private var buildLog = ""
     @State private var isBuilding = false
+    @State private var isRunning = false
+    @State private var isPython = false
     @State private var showLog = false
     @State private var showNewFileSheet = false
     @State private var showAIChat = false
@@ -85,7 +100,7 @@ struct BuildView: View {
                 }
             }
             .listStyle(.plain)
-                        .onAppear { reloadFiles(); refreshSDKList() }
+                        .onAppear { reloadFiles(); refreshSDKList(); isPython = PythonPackager.isPythonProject(project) }
 
             // 底部編譯按鈕
             HStack {
@@ -98,6 +113,20 @@ struct BuildView: View {
                 }
                 .padding()
                 Spacer()
+                if isPython {
+                    Button(action: {
+                        showLog = true
+                        runPythonPreview()
+                    }) {
+                        HStack {
+                            Image(systemName: "play.circle")
+                            Text(isRunning ? "運行中…" : "運行")
+                        }
+                        .foregroundColor(isRunning ? .gray : .accentColor)
+                    }
+                    .disabled(isRunning || isBuilding)
+                    .padding()
+                }
                 Button(action: {
                     showLog = true
                     startBuild()
@@ -222,6 +251,37 @@ struct BuildView: View {
     }
 
     /// 調 C 橋接（clang / ld），回傳 (rc, diagnostics)
+    /// Python 專案：在 PaxIDX 內直接運行 main.py，輸出即時進主控台（日誌頁）
+    private func runPythonPreview() {
+        guard !isRunning else { return }
+        if paxidx_python_embedded() == 0 {
+            buildLog = "此版本未內嵌 Python 預覽運行時（包內標準庫不在位）\n"
+            return
+        }
+        isRunning = true
+        buildLog = "▶ 運行 main.py（PaxIDX 內建 CPython 3.13）\n"
+        let srcPath = ProjectFiles.sourcesDirectory(for: project.name).path
+        let box = PythonLogBox { line in
+            DispatchQueue.main.async { buildLog += line + "\n" }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let opaque = Unmanaged.passRetained(box).toOpaque()
+            let rc = srcPath.withCString { paxidx_python_run($0, paxidxPythonLogTrampoline, opaque) }
+            Unmanaged<PythonLogBox>.fromOpaque(opaque).release()
+            DispatchQueue.main.async {
+                isRunning = false
+                if rc == 3 {
+                    buildLog += "■ 找不到或打不開 main.py\n"
+                } else if rc != 0 {
+                    buildLog += "■ 運行失敗（rc=\(rc)）\n"
+                } else {
+                    buildLog += "■ 運行結束\n"
+                }
+                BuildLogStore.shared.save(project: project.name, log: buildLog)
+            }
+        }
+    }
+
     private func runNative(
         _ args: [String],
         _ fn: (Int32, UnsafePointer<UnsafePointer<CChar>?>?, UnsafeMutablePointer<CChar>?, Int) -> Int32

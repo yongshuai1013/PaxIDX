@@ -35,6 +35,10 @@ targets:
     dependencies:
       - package: Zip
       - package: Highlightr
+      # Python 預覽運行時（BeeWare CPython 3.13）：CI 先把 Python.xcframework
+      # 解到專案根目錄再跑 xcodegen（build-ipa.yml），缺檔時生成會失敗
+      - framework: Python.xcframework
+        embed: true
     sources:
       - path: Sources/PaxIDX
         excludes:

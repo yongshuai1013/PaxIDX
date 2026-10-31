@@ -74,6 +74,17 @@ int paxidx_cert_profile_bundle_id(char *buf, size_t cap);
 /// 清除已導入身份
 int paxidx_cert_clear(void);
 
+/// Python 預覽 log 回調（逐行送出，line 不含換行符）
+typedef void (*paxidx_python_log_fn)(const char *line, void *ctx);
+
+/// PaxIDX 是否內嵌 Python 預覽運行時（包內 python/ 標準庫在位）：1=有、0=無
+int paxidx_python_embedded(void);
+
+/// 在 PaxIDX 內執行 scriptDir/main.py（CPython 直譯器只初始化一次）；
+/// print 與 traceback 逐行經 logFn 送回。回傳：0=已執行（成敗看 log）、
+/// 1=初始化失敗、2=未內嵌、3=打不開 main.py
+int paxidx_python_run(const char *scriptDir, paxidx_python_log_fn logFn, void *ctx);
+
 /// 以導入身份真簽名單一 Mach-O（照 ZSign：雙 CodeDirectory + 真 CMS）；
 /// identOrNull 為 NULL 時 dylib 用 LC_ID_DYLIB；主程式自動掛 entitlements
 /// （有描述檔用描述檔改寫 app id，否則最小集）；report 回簽名摘要；0=成功
