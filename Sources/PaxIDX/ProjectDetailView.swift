@@ -202,10 +202,12 @@ struct FileEditorView: View {
     @Environment(\.presentationMode) var presentationMode
     @State private var content = ""
     @State private var message = ""
+    @State private var vocabulary: [String] = []
 
     var body: some View {
         VStack {
-            CodeEditorView(text: $content, language: highlightLanguage)
+            CodeEditorView(text: $content, language: highlightLanguage,
+                           completionVocabulary: vocabulary)
             if !message.isEmpty {
                 Text(message)
                     .font(.caption)
@@ -216,7 +218,10 @@ struct FileEditorView: View {
         .navigationBarItems(
             trailing: Button("保存") { save() }
         )
-        .onAppear(perform: load)
+        .onAppear {
+            load()
+            buildVocabulary()
+        }
     }
 
     /// 副檔名 → highlight.js 語言名
@@ -228,6 +233,20 @@ struct FileEditorView: View {
         case "swift": return "swift"
         default: return "cpp"
         }
+    }
+
+    /// 補全詞彙：同專案所有源檔出現過的標識符（開啟編輯器時掃一次）
+    private func buildVocabulary() {
+        let dir = ProjectFiles.sourcesDirectory(for: project.name)
+        var words = Set<String>()
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for f in files {
+                if let s = try? String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8) {
+                    words.formUnion(CompletionVocab.identifiers(in: s))
+                }
+            }
+        }
+        vocabulary = Array(words)
     }
 
     private func load() {
