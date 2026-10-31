@@ -18,13 +18,18 @@ struct CodeEditorView: UIViewRepresentable {
 
         // 行號欄（自繪 view，不再是文字視圖）
         let gutter = LineNumberGutterView()
+        gutter.numberFont = context.coordinator.currentFont()
         gutter.backgroundColor = .systemBackground
         gutter.translatesAutoresizingMaskIntoConstraints = false
 
         // 主編輯區
         let textView = UITextView()
         textView.delegate = context.coordinator
-        textView.font = font
+        textView.font = context.coordinator.currentFont()
+        // 雙指縮放：改字體大小（行號欄同步，值存 UserDefaults）
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handlePinch(_:)))
+        textView.addGestureRecognizer(pinch)
         textView.backgroundColor = .systemBackground
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
         textView.autocapitalizationType = .none
@@ -68,9 +73,34 @@ struct CodeEditorView: UIViewRepresentable {
         weak var gutter: LineNumberGutterView?
         weak var textView: UITextView?
         private var isHighlighting = false
+        private(set) var fontSize: CGFloat
+        private var pinchStartSize: CGFloat = 14
 
         init(_ parent: CodeEditorView) {
             self.parent = parent
+            let saved = UserDefaults.standard.double(forKey: "paxidx.editor.fontSize")
+            fontSize = saved > 0 ? CGFloat(saved) : parent.font.pointSize
+        }
+
+        func currentFont() -> UIFont {
+            .monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        }
+
+        @objc func handlePinch(_ g: UIPinchGestureRecognizer) {
+            if g.state == .began { pinchStartSize = fontSize }
+            if g.state == .changed || g.state == .ended {
+                setFontSize(min(32, max(9, pinchStartSize * g.scale)))
+            }
+        }
+
+        private func setFontSize(_ size: CGFloat) {
+            if abs(size - fontSize) < 0.4 { return }
+            fontSize = size
+            UserDefaults.standard.set(Double(size), forKey: "paxidx.editor.fontSize")
+            textView?.font = currentFont()
+            gutter?.numberFont = currentFont()
+            applyHighlight()
+            gutter?.setNeedsDisplay()
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -92,7 +122,7 @@ struct CodeEditorView: UIViewRepresentable {
             guard let tv = textView else { return }
             isHighlighting = true
             let selectedRange = tv.selectedRange
-            let attr = CHighlighter.highlight(tv.text, font: parent.font)
+            let attr = CHighlighter.highlight(tv.text, font: currentFont())
             tv.attributedText = attr
             tv.selectedRange = selectedRange
             isHighlighting = false
@@ -155,6 +185,25 @@ private enum CHighlighter {
         "struct", "union", "enum", "typedef", "static", "const", "extern", "return",
         "if", "else", "for", "while", "do", "switch", "case", "break", "continue",
         "sizeof", "include",
+        // C++
+        "class", "public", "private", "protected", "virtual", "override", "final",
+        "template", "typename", "namespace", "using", "new", "delete", "this",
+        "nullptr", "true", "false", "auto", "constexpr", "noexcept", "friend",
+        "inline", "mutable", "explicit", "operator", "throw", "try", "catch",
+        // ObjC
+        "nil", "YES", "NO", "self", "super",
+    ]
+
+    /// 常見型別（另一色）：ObjC／UIKit 型別＋基本數值型別
+    static let types: Set<String> = [
+        "NSString", "NSMutableString", "NSArray", "NSMutableArray",
+        "NSDictionary", "NSMutableDictionary", "NSSet", "NSNumber", "NSData",
+        "NSDate", "NSURL", "NSError", "NSObject", "NSValue",
+        "UIView", "UIViewController", "UIWindow", "UILabel", "UIButton",
+        "UIColor", "UIFont", "UIScreen", "UIApplication", "UIResponder",
+        "UIImage", "UIImageView", "UITableView", "UICollectionView",
+        "BOOL", "NSInteger", "NSUInteger", "CGFloat", "CGRect", "CGPoint",
+        "CGSize", "SEL",
     ]
 
     static func highlight(_ text: String, font: UIFont) -> NSAttributedString {
@@ -180,6 +229,16 @@ private enum CHighlighter {
         // 數字
         let numPattern = #"\b\d+\b"#
         apply(pattern: numPattern, color: .systemPurple, in: result, ns: ns)
+
+        // ObjC @ 指令（@interface／@implementation／@end…，但不碰 @" 字串）
+        apply(pattern: "@(?![\\\"])[A-Za-z]+", color: .systemPurple, in: result, ns: ns)
+
+        // 型別與 std:: 型別
+        for tp in types {
+            let pattern = "\\b\(tp)\\b"
+            apply(pattern: pattern, color: .systemTeal, in: result, ns: ns)
+        }
+        apply(pattern: "std::[A-Za-z_]+", color: .systemTeal, in: result, ns: ns)
 
         // 關鍵字
         for kw in keywords {
