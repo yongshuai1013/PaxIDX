@@ -44,6 +44,14 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                Section(header: Text("AI")) {
+                    NavigationLink(destination: AISettingsView()) {
+                        Text("AI 助手設定")
+                    }
+                    Text("自帶 API key（BYOK）：在專案頁開 AI 對話，帶入專案檔案與編譯日誌解讀錯誤")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Section(header: Text("關於")) {
                     HStack {
                         Text("版本")

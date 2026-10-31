@@ -7,6 +7,7 @@ struct ProjectDetailView: View {
     @State private var selectedFile: String?
     @State private var showEditor = false
     @State private var showBuild = false
+    @State private var showAIChat = false
     @State private var message = ""
     @StateObject private var clipboard = FileClipboard.shared
     @State private var showRenameAlert = false
@@ -51,6 +52,16 @@ struct ProjectDetailView: View {
                     HStack {
                         Spacer()
                         Text("編譯")
+                            .font(.headline)
+                        Spacer()
+                    }
+                }
+            }
+            Section {
+                Button(action: { showAIChat = true }) {
+                    HStack {
+                        Spacer()
+                        Text("AI 助手")
                             .font(.headline)
                         Spacer()
                     }
@@ -110,6 +121,11 @@ struct ProjectDetailView: View {
         .fullScreenCover(isPresented: $showBuild) {
             NavigationView {
                 BuildView(project: project)
+            }
+        }
+        .sheet(isPresented: $showAIChat) {
+            NavigationView {
+                AIChatView(project: project)
             }
         }
     }

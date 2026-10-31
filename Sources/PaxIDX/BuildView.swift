@@ -400,6 +400,7 @@ struct BuildView: View {
             onDone: { _, msg in
                 isBuilding = false
                 buildLog += msg + "\n"
+                BuildLogStore.shared.save(project: project.name, log: buildLog)
                 reloadFiles()
             }
         )
