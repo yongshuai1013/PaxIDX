@@ -205,7 +205,7 @@ struct FileEditorView: View {
 
     var body: some View {
         VStack {
-            CodeEditorView(text: $content)
+            CodeEditorView(text: $content, language: highlightLanguage)
             if !message.isEmpty {
                 Text(message)
                     .font(.caption)
@@ -217,6 +217,17 @@ struct FileEditorView: View {
             trailing: Button("保存") { save() }
         )
         .onAppear(perform: load)
+    }
+
+    /// 副檔名 → highlight.js 語言名
+    private var highlightLanguage: String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "c", "h": return "c"
+        case "cpp", "cc", "cxx", "hpp", "hh": return "cpp"
+        case "m", "mm": return "objectivec"
+        case "swift": return "swift"
+        default: return "cpp"
+        }
     }
 
     private func load() {
