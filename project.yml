@@ -47,6 +47,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(PAXIDX_BUNDLE_ID)
         # C 工具鏈橋接（給 Swift 調用 paxidx_* 函數）
         SWIFT_OBJC_BRIDGING_HEADER: $(SRCROOT)/Sources/PaxIDX/PaxIDX-Bridging-Header.h
+        # App 圖標（Assets.xcassets/AppIcon，C 案：P＋行號欄＋大括號）
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # 原生工具鏈暫時不靜態鏈接（iPhone 7 啟動載入會被系統殺掉）
         # 下一步：改成 dylib，點編譯時才動態載入
     info:
