@@ -139,6 +139,8 @@ struct BuildView: View {
                 buttons: [
                     .default(Text("C 源文件")) { createNewFile(type: "c") },
                     .default(Text("Objective-C 源文件")) { createNewFile(type: "m") },
+                    .default(Text("C++ 源文件")) { createNewFile(type: "cpp") },
+                    .default(Text("Objective-C++ 源文件")) { createNewFile(type: "mm") },
                     .default(Text("Swift 源文件")) { createNewFile(type: "swift") },
                     .default(Text("頭文件")) { createNewFile(type: "h") },
                     .default(Text("空白文件")) { createNewFile(type: "txt") },
@@ -160,6 +162,12 @@ struct BuildView: View {
         case "m":
             ext = "m"
             template = "#import <Foundation/Foundation.h>\n\nint main(int argc, char *argv[]) {\n    @autoreleasepool {\n        NSLog(@\"Hello\");\n    }\n    return 0;\n}\n"
+        case "cpp":
+            ext = "cpp"
+            template = "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, C++!\" << std::endl;\n    return 0;\n}\n"
+        case "mm":
+            ext = "mm"
+            template = "#import <Foundation/Foundation.h>\n#include <string>\n#include <iostream>\n\nint main(int argc, char *argv[]) {\n    @autoreleasepool {\n        std::string who = \"ObjC++\";\n        std::cout << \"Hello from \" << who << std::endl;\n        NSLog(@\"Hello from %s\", who.c_str());\n    }\n    return 0;\n}\n"
         case "swift":
             ext = "swift"
             template = "print(\"Hello\")\n"
