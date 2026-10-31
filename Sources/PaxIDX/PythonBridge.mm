@@ -7,6 +7,8 @@
 #import <Python/Python.h>
 #include "NativeToolchainBridge.h"
 
+extern "C" PyObject *PyInit__paxscene(void);
+
 static int gPyReady = 0;
 static paxidx_python_log_fn gLogFn = NULL;
 static void *gLogCtx = NULL;
@@ -55,6 +57,28 @@ static const char *kWriterSetup =
     "sys.stdout = _pax_writer\n"
     "sys.stderr = _pax_writer\n";
 
+
+// 把包內的 ui.py／scene.py 載成 sys.modules['ui']／['scene']
+// （圖形橋接的 Python 側薄封裝；載入失敗只記 NSLog，不擋主控台預覽）
+static void loadBundledSceneModules(void) {
+    NSString *dir = [[NSBundle mainBundle] bundlePath];
+    NSString *code = [NSString stringWithFormat:
+        @"import importlib.util, sys\n"
+        "for _n in ('ui', 'scene'):\n"
+        "    _p = '%@/' + _n + '.py'\n"
+        "    try:\n"
+        "        _spec = importlib.util.spec_from_file_location(_n, _p)\n"
+        "        _m = importlib.util.module_from_spec(_spec)\n"
+        "        sys.modules[_n] = _m\n"
+        "        _spec.loader.exec_module(_m)\n"
+        "    except Exception:\n"
+        "        import traceback; traceback.print_exc()\n", dir];
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyRun_SimpleString([code UTF8String]);
+    if (PyErr_Occurred()) PyErr_Clear();
+    PyGILState_Release(gil);
+}
+
 static int ensurePython(void) {
     if (gPyReady) return 0;
     NSString *home = [[[NSBundle mainBundle] bundlePath]
@@ -63,6 +87,7 @@ static int ensurePython(void) {
     if (![[NSFileManager defaultManager] fileExistsAtPath:probe]) return 2;
 
     PyImport_AppendInittab("_paxbridge", &PyInit__paxbridge);
+    PyImport_AppendInittab("_paxscene", &PyInit__paxscene);
 
     PyPreConfig preconfig;
     PyConfig config;
@@ -89,6 +114,7 @@ static int ensurePython(void) {
     if (PyStatus_Exception(status)) return 1;
 
     gPyReady = 1;
+    loadBundledSceneModules();
     PyEval_SaveThread(); // 釋放 GIL，之後每次運行以 PyGILState 進出
     return 0;
 }
