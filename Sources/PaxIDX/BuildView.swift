@@ -29,6 +29,7 @@ struct BuildView: View {
     @State private var isBuilding = false
     @State private var showLog = false
     @State private var showNewFileSheet = false
+    @State private var showAIChat = false
     @State private var newFileName = ""
     @State private var newFileType = "c"
 
@@ -88,6 +89,14 @@ struct BuildView: View {
 
             // 底部編譯按鈕
             HStack {
+                Button(action: { showAIChat = true }) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("AI 助手")
+                    }
+                    .foregroundColor(.accentColor)
+                }
+                .padding()
                 Spacer()
                 Button(action: {
                     showLog = true
@@ -111,6 +120,11 @@ struct BuildView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .sheet(isPresented: $showAIChat) {
+            NavigationView {
+                AIChatView(project: project)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("完成") {
