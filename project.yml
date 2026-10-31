@@ -22,6 +22,10 @@ packages:
   Zip:
     url: https://github.com/marmelroy/Zip
     version: 2.1.2
+  # 語法高亮（highlight.js 引擎，MIT）；編輯器 CHighlighter 正則版已由它取代
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    version: 2.3.0
 
 targets:
   PaxIDX:
@@ -30,6 +34,7 @@ targets:
     deploymentTarget: "15.0"
     dependencies:
       - package: Zip
+      - package: Highlightr
     sources:
       - path: Sources/PaxIDX
         excludes:
