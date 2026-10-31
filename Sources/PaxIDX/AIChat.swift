@@ -27,7 +27,13 @@ enum AIConfig {
         set { KeychainStore.set("ai.apiKey", newValue) }
     }
 
-    static var isConfigured: Bool { !apiKey.isEmpty }
+    /// 免 key 服務（Pollinations／LLM7）：不用 key 也能打
+    static var isKeylessEndpoint: Bool {
+        guard let host = URL(string: endpoint)?.host else { return false }
+        return host.contains("pollinations.ai") || host.contains("llm7.io")
+    }
+
+    static var isConfigured: Bool { !apiKey.isEmpty || isKeylessEndpoint }
 }
 
 /// 簡易 Keychain 存取（generic password）
@@ -106,12 +112,16 @@ enum AIChatClient {
     private static func makeRequest(endpoint: String, apiKey: String, model: String,
                                     messages: [(role: String, content: String)],
                                     stream: Bool) throws -> URLRequest {
-        guard !apiKey.isEmpty else { throw AIError.notConfigured }
+        let keylessHost = URL(string: endpoint)?.host ?? ""
+        let keyless = keylessHost.contains("pollinations.ai") || keylessHost.contains("llm7.io")
+        guard !apiKey.isEmpty || keyless else { throw AIError.notConfigured }
         guard let url = URL(string: endpoint) else { throw AIError.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !apiKey.isEmpty {
+            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         let payload: [String: Any] = [
             "model": model,
             "stream": stream,
