@@ -1,4 +1,5 @@
 import SwiftUI
+import Highlightr
 
 /// 代碼編輯器：行號＋C 語法高亮（iOS 15 可用）
 /// 行號改畫在 UITextView 子類自己的 draw 裡（Forge 等現成編輯器的通行做法）：
@@ -9,6 +10,8 @@ import SwiftUI
 /// 兩張截圖行距編號都不同）。本版廢掉分離 gutter，inset 左側即號碼欄。
 struct CodeEditorView: UIViewRepresentable {
     @Binding var text: String
+    /// highlight.js 語言名（c／cpp／objectivec／swift），由檔案副檔名決定
+    var language: String = "cpp"
     var font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
 
     func makeCoordinator() -> Coordinator {
@@ -83,12 +86,44 @@ struct CodeEditorView: UIViewRepresentable {
             (textView as? EditorTextView)?.refreshGutterWidth()
         }
 
+        private var highlighter: Highlightr?
+        private var appliedThemeName = ""
+        private var appliedFontSize: CGFloat = -1
+
         func applyHighlight() {
             guard let tv = textView else { return }
             isHighlighting = true
             let selectedRange = tv.selectedRange
-            let attr = CHighlighter.highlight(tv.text, font: currentFont())
-            tv.attributedText = attr
+            let code = tv.text ?? ""
+            if highlighter == nil { highlighter = Highlightr() }
+            var result: NSAttributedString?
+            if let hl = highlighter {
+                // 主題隨深淺色（xcode 亮／xcode-dark 暗）；換主題或字級才重設，避免每鍵重解析 CSS
+                let dark = tv.traitCollection.userInterfaceStyle == .dark
+                let themeName = dark ? "xcode-dark" : "xcode"
+                if themeName != appliedThemeName {
+                    _ = hl.setTheme(to: themeName)
+                    appliedThemeName = themeName
+                    appliedFontSize = -1
+                }
+                if fontSize != appliedFontSize {
+                    hl.theme.setCodeFont(currentFont())
+                    appliedFontSize = fontSize
+                }
+                result = hl.highlight(code, as: parent.language)
+            }
+            if let result = result {
+                // 主題自帶的 .hljs 背景色不用：編輯器背景維持 systemBackground
+                let mutable = NSMutableAttributedString(attributedString: result)
+                mutable.removeAttribute(.backgroundColor,
+                                        range: NSRange(location: 0, length: mutable.length))
+                tv.attributedText = mutable
+            } else {
+                // Highlightr 不可用就老實純文字，不假裝有高亮
+                tv.attributedText = NSAttributedString(
+                    string: code,
+                    attributes: [.font: currentFont(), .foregroundColor: UIColor.label])
+            }
             tv.selectedRange = selectedRange
             isHighlighting = false
         }
@@ -173,88 +208,6 @@ final class EditorTextView: UITextView {
                 let total = text.reduce(into: 1) { n, c in if c == "\n" { n += 1 } }
                 drawNumber(ns.length == 0 ? 1 : total, frag: extra)
             }
-        }
-    }
-}
-
-/// 簡單 C 高亮：關鍵字／字串／註釋／預處理／數字
-private enum CHighlighter {
-    static let keywords: Set<String> = [
-        "int", "char", "void", "float", "double", "long", "short", "signed", "unsigned",
-        "struct", "union", "enum", "typedef", "static", "const", "extern", "return",
-        "if", "else", "for", "while", "do", "switch", "case", "break", "continue",
-        "sizeof", "include",
-        // C++
-        "class", "public", "private", "protected", "virtual", "override", "final",
-        "template", "typename", "namespace", "using", "new", "delete", "this",
-        "nullptr", "true", "false", "auto", "constexpr", "noexcept", "friend",
-        "inline", "mutable", "explicit", "operator", "throw", "try", "catch",
-        // ObjC
-        "nil", "YES", "NO", "self", "super",
-    ]
-
-    /// 常見型別（另一色）：ObjC／UIKit 型別＋基本數值型別
-    static let types: Set<String> = [
-        "NSString", "NSMutableString", "NSArray", "NSMutableArray",
-        "NSDictionary", "NSMutableDictionary", "NSSet", "NSNumber", "NSData",
-        "NSDate", "NSURL", "NSError", "NSObject", "NSValue",
-        "UIView", "UIViewController", "UIWindow", "UILabel", "UIButton",
-        "UIColor", "UIFont", "UIScreen", "UIApplication", "UIResponder",
-        "UIImage", "UIImageView", "UITableView", "UICollectionView",
-        "BOOL", "NSInteger", "NSUInteger", "CGFloat", "CGRect", "CGPoint",
-        "CGSize", "SEL",
-    ]
-
-    static func highlight(_ text: String, font: UIFont) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: text)
-        let fullRange = NSRange(location: 0, length: (text as NSString).length)
-        result.addAttribute(.font, value: font, range: fullRange)
-        result.addAttribute(.foregroundColor, value: UIColor.label, range: fullRange)
-
-        let ns = text as NSString
-
-        // 註釋：//... 和 /*...*/
-        let commentPattern = #"//.*|/\*[\s\S]*?\*/"#
-        apply(pattern: commentPattern, color: .systemGreen, in: result, ns: ns)
-
-        // 字串："..."
-        let stringPattern = #""(?:[^"\\]|\\.)*""#
-        apply(pattern: stringPattern, color: .systemRed, in: result, ns: ns)
-
-        // 預處理：#...
-        let prePattern = #"^\s*#.*"#
-        apply(pattern: prePattern, color: .systemRed, options: .anchorsMatchLines, in: result, ns: ns)
-
-        // 數字
-        let numPattern = #"\b\d+\b"#
-        apply(pattern: numPattern, color: .systemPurple, in: result, ns: ns)
-
-        // ObjC @ 指令（@interface／@implementation／@end…，但不碰 @" 字串）
-        apply(pattern: "@(?![\\\"])[A-Za-z]+", color: .systemPurple, in: result, ns: ns)
-
-        // 型別與 std:: 型別
-        for tp in types {
-            let pattern = "\\b\(tp)\\b"
-            apply(pattern: pattern, color: .systemTeal, in: result, ns: ns)
-        }
-        apply(pattern: "std::[A-Za-z_]+", color: .systemTeal, in: result, ns: ns)
-
-        // 關鍵字
-        for kw in keywords {
-            let pattern = "\\b\(kw)\\b"
-            apply(pattern: pattern, color: .systemPurple, in: result, ns: ns)
-        }
-
-        return result
-    }
-
-    private static func apply(pattern: String, color: UIColor,
-                              options: NSRegularExpression.Options = [],
-                              in attr: NSMutableAttributedString, ns: NSString) {
-        guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return }
-        let range = NSRange(location: 0, length: ns.length)
-        for m in re.matches(in: ns as String, options: [], range: range) {
-            attr.addAttribute(.foregroundColor, value: color, range: m.range)
         }
     }
 }
