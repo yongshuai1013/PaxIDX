@@ -26,12 +26,19 @@ struct AISettingsView: View {
     var body: some View {
         Form {
             Section(header: Text("服務")) {
-                Picker("預設", selection: $preset) {
-                    ForEach(Preset.allCases) { p in
-                        Text(p.rawValue).tag(p)
+                ForEach(Preset.allCases) { p in
+                    Button(action: { preset = p; applyPreset(p) }) {
+                        HStack {
+                            Text(p.rawValue)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if preset == p {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.accentColor)
+                            }
+                        }
                     }
                 }
-                .onChange(of: preset) { applyPreset($0) }
                 TextField("端點 URL", text: $endpoint)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
