@@ -22,6 +22,8 @@ struct SDKDownloadView: View {
     @State private var progress: Double = 0
     @State private var statusText = ""
     @StateObject private var downloader = SDKZipDownloader()
+    @State private var pythonBusy = false
+    @State private var pythonInstalled = false
 
     var body: some View {
         List {
@@ -57,6 +59,36 @@ struct SDKDownloadView: View {
                     .padding(.vertical, 2)
                 }
             }
+            Section(header: Text("Python 執行環境")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Python 3.13（CPython）")
+                        Spacer()
+                        if pythonInstalled {
+                            Text("已安裝")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Button("刪除") {
+                                PythonRuntimeStore.remove()
+                                refresh()
+                            }
+                            .font(.caption)
+                            .foregroundColor(.red)
+                        } else if pythonBusy {
+                            Text("處理中…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Button("下載") { startPythonDownload() }
+                                .font(.caption)
+                        }
+                    }
+                    if pythonBusy {
+                        ProgressView(value: progress)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
             if !statusText.isEmpty {
                 Section(header: Text("狀態")) {
                     Text(statusText)
@@ -77,6 +109,44 @@ struct SDKDownloadView: View {
 
     private func refresh() {
         installed = PaxSDKStore.installedSDKs()
+        pythonInstalled = PythonRuntimeStore.isInstalled
+    }
+
+    private func startPythonDownload() {
+        guard let url = URL(string: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxpython-3.13/PaxPythonRuntime.zip") else { return }
+        pythonBusy = true
+        progress = 0
+        statusText = "下載 Python 執行環境中…"
+        downloader.start(url: url,
+            onProgress: { p in progress = p },
+            onDone: { file, errorText in
+                if let errorText = errorText {
+                    statusText = "下載失敗：\(errorText)"
+                    pythonBusy = false
+                    return
+                }
+                guard let file = file else {
+                    statusText = "下載失敗：沒有檔案"
+                    pythonBusy = false
+                    return
+                }
+                statusText = "解壓安裝中…"
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        try PythonRuntimeStore.install(zipAt: file)
+                        DispatchQueue.main.async {
+                            statusText = "已安裝 Python \(PythonRuntimeStore.version ?? "3.13") 執行環境"
+                            pythonBusy = false
+                            refresh()
+                        }
+                    } catch {
+                        DispatchQueue.main.async {
+                            statusText = "安裝失敗：\(error.localizedDescription)"
+                            pythonBusy = false
+                        }
+                    }
+                }
+            })
     }
 
     private func startDownload(_ rel: ReleaseInfo) {

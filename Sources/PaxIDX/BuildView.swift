@@ -156,6 +156,7 @@ struct BuildView: View {
                     .default(Text("C++ 源文件")) { createNewFile(type: "cpp") },
                     .default(Text("Objective-C++ 源文件")) { createNewFile(type: "mm") },
                     .default(Text("Swift 源文件")) { createNewFile(type: "swift") },
+                    .default(Text("Python 源文件")) { createNewFile(type: "py") },
                     .default(Text("頭文件")) { createNewFile(type: "h") },
                     .default(Text("空白文件")) { createNewFile(type: "txt") },
                     .default(Text("文件夾")) { createNewFolder() },
@@ -182,6 +183,9 @@ struct BuildView: View {
         case "mm":
             ext = "mm"
             template = "#import <UIKit/UIKit.h>\n#include <string>\n#include <vector>\n\n// C++ class: the label text is built by C++ code\nclass Greeter {\npublic:\n    std::string message() const {\n        std::vector<std::string> parts = {\"Hello\", \"from\", \"ObjC++\"};\n        std::string out;\n        for (size_t i = 0; i < parts.size(); i++) {\n            if (i > 0) out += \" \";\n            out += parts[i];\n        }\n        return out;\n    }\n};\n\n@interface AppDelegate : UIResponder <UIApplicationDelegate>\n@property (nonatomic, strong) UIWindow *window;\n@end\n\n@implementation AppDelegate\n- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {\n    self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];\n    UIViewController *vc = [UIViewController new];\n    vc.view.backgroundColor = [UIColor whiteColor];\n    Greeter greeter;\n    UILabel *label = [[UILabel alloc] initWithFrame:vc.view.bounds];\n    label.text = [NSString stringWithUTF8String:greeter.message().c_str()];\n    label.textAlignment = NSTextAlignmentCenter;\n    label.textColor = [UIColor blackColor];\n    label.font = [UIFont systemFontOfSize:24];\n    [vc.view addSubview:label];\n    self.window.rootViewController = vc;\n    [self.window makeKeyAndVisible];\n    return YES;\n}\n@end\n\nint main(int argc, char *argv[]) {\n    @autoreleasepool {\n        return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));\n    }\n}\n"
+        case "py":
+            ext = "py"
+            template = "print(\"Hello, Python!\")\n"
         case "swift":
             ext = "swift"
             template = "print(\"Hello\")\n"
@@ -239,6 +243,52 @@ struct BuildView: View {
         buildLog = ""
         isBuilding = true
         var chosenSDK: PaxSDKStore.InstalledSDK? = nil
+
+        // Python 專案（只有 .py 源碼）：不走編譯器，組裝 CPython 執行環境出 IPA
+        if PythonPackager.isPythonProject(project) {
+            let pyStages = [
+                BuildStage(name: "檢查 Python 執行環境") { log in
+                    guard PythonRuntimeStore.isInstalled else {
+                        return "未安裝 Python 執行環境（到設定→「下載 SDK」頁下載 Python 3.13 執行環境）"
+                    }
+                    log("Python 執行環境：CPython \(PythonRuntimeStore.version ?? "3.13")（BeeWare）")
+                    return nil
+                },
+                BuildStage(name: "組裝 App") { log in
+                    let fm = FileManager.default
+                    let buildDir = ProjectFiles.directory(for: project.name)
+                        .appendingPathComponent("build", isDirectory: true)
+                    try? fm.removeItem(at: buildDir)
+                    try? fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
+                    return PythonPackager.assemble(project: project, buildDir: buildDir, log: log)
+                },
+                BuildStage(name: "打包 IPA") { log in
+                    let buildDir = ProjectFiles.directory(for: project.name)
+                        .appendingPathComponent("build", isDirectory: true)
+                    let appDir = buildDir.appendingPathComponent("\(project.name).app", isDirectory: true)
+                    let ipaURL = ProjectFiles.directory(for: project.name)
+                        .appendingPathComponent("\(project.name).ipa")
+                    do {
+                        try IPABuilder.build(appURL: appDir, outputURL: ipaURL, log: log)
+                    } catch {
+                        return "打包失敗：\(error.localizedDescription)"
+                    }
+                    log("註：Python 專案 v1 未套用證書簽名，請用 TrollStore 安裝")
+                    return nil
+                },
+            ]
+            BuildExecutor(stages: pyStages).execute(
+                onStage: { _, _ in },
+                onLog: { line in buildLog += line + "\n" },
+                onDone: { _, msg in
+                    isBuilding = false
+                    buildLog += msg + "\n"
+                    BuildLogStore.shared.save(project: project.name, log: buildLog)
+                    reloadFiles()
+                }
+            )
+            return
+        }
 
         let stages = [
             BuildStage(name: "檢查編譯器") { log in

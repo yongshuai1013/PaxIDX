@@ -90,6 +90,7 @@ struct NewProjectView: View {
                         Text("C").tag("c")
                         Text("C++").tag("cpp")
                         Text("Objective-C++").tag("mm")
+                        Text("Python").tag("python")
                     }
                     .pickerStyle(.menu)
                 }

@@ -231,6 +231,8 @@ struct FileEditorView: View {
         case "cpp", "cc", "cxx", "hpp", "hh": return "cpp"
         case "m", "mm": return "objectivec"
         case "swift": return "swift"
+
+        case "py": return "python"
         default: return "cpp"
         }
     }
