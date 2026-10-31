@@ -14,6 +14,8 @@ struct CodeEditorView: UIViewRepresentable {
     var language: String = "cpp"
     /// 預覽用途可關編輯（設定頁主題預覽）
     var editable: Bool = true
+    /// 補全候選的額外詞彙（呼叫端傳入：同專案各源檔的標識符）
+    var completionVocabulary: [String] = []
     var font: UIFont = .monospacedSystemFont(ofSize: 14, weight: .regular)
 
     func makeCoordinator() -> Coordinator {
@@ -33,6 +35,16 @@ struct CodeEditorView: UIViewRepresentable {
         let pinch = UIPinchGestureRecognizer(target: context.coordinator,
                                              action: #selector(Coordinator.handlePinch(_:)))
         textView.addGestureRecognizer(pinch)
+
+        if editable {
+            // 補全候選條掛鍵盤上方（唯讀預覽不掛）
+            let bar = CompletionBarView()
+            bar.onPick = { [weak c = context.coordinator] word in
+                c?.applyCompletion(word)
+            }
+            textView.inputAccessoryView = bar
+            context.coordinator.completionBar = bar
+        }
 
         context.coordinator.textView = textView
         context.coordinator.applyHighlight()
@@ -55,6 +67,7 @@ struct CodeEditorView: UIViewRepresentable {
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditorView
         weak var textView: EditorTextView?
+        weak var completionBar: CompletionBarView?
         private var isHighlighting = false
         private(set) var fontSize: CGFloat
         private var pinchStartSize: CGFloat = 14
@@ -90,6 +103,11 @@ struct CodeEditorView: UIViewRepresentable {
             parent.text = textView.text
             applyHighlight()
             (textView as? EditorTextView)?.refreshGutterWidth()
+            refreshCompletions()
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            refreshCompletions()
         }
 
         func themeIsStale(for tv: UITextView) -> Bool {
@@ -239,4 +257,214 @@ final class EditorTextView: UITextView {
             }
         }
     }
+}
+
+// MARK: - 詞彙補全（第一版：前綴比對，不做型別推斷）
+
+extension CodeEditorView.Coordinator {
+    /// 游標前的標識符前綴（至少 2 字、非純數字）
+    func currentPrefix() -> (word: String, range: NSRange)? {
+        guard let tv = textView else { return nil }
+        let sel = tv.selectedRange
+        guard sel.length == 0, sel.location > 0 else { return nil }
+        let ns = tv.text as NSString
+        var start = sel.location
+        while start > 0 {
+            let ch = ns.character(at: start - 1)
+            let isIdent = (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122)
+                || (ch >= 48 && ch <= 57) || ch == 95
+            if !isIdent { break }
+            start -= 1
+        }
+        let len = sel.location - start
+        guard len >= 2 else { return nil }
+        let word = ns.substring(with: NSRange(location: start, length: len))
+        if word.allSatisfy({ $0.isNumber }) { return nil }
+        return (word, NSRange(location: start, length: len))
+    }
+
+    /// 重算候選並更新候選條；候選池＝內建詞表＋專案詞＋本文標識符
+    func refreshCompletions() {
+        guard let tv = textView, completionBar != nil else { return }
+        guard let (prefix, _) = currentPrefix() else {
+            setBar(tv, [])
+            return
+        }
+        var pool = CompletionVocab.words(for: parent.language)
+        pool.formUnion(parent.completionVocabulary)
+        pool.formUnion(CompletionVocab.identifiers(in: tv.text ?? ""))
+        let lower = prefix.lowercased()
+        var hits = pool.filter { $0.lowercased().hasPrefix(lower) && $0 != prefix }
+        hits.sort { ($0.count, $0.lowercased()) < ($1.count, $1.lowercased()) }
+        setBar(tv, Array(hits.prefix(12)))
+    }
+
+    private func setBar(_ tv: EditorTextView, _ candidates: [String]) {
+        guard let bar = completionBar else { return }
+        let was = bar.isShowing
+        bar.update(candidates: candidates)
+        if bar.isShowing != was { tv.reloadInputViews() }
+    }
+
+    /// 點選候選：以前綴範圍換成完整詞，游標移到詞尾
+    func applyCompletion(_ word: String) {
+        guard let tv = textView, let (_, range) = currentPrefix() else { return }
+        let ns = tv.text as NSString
+        tv.text = ns.replacingCharacters(in: range, with: word)
+        tv.selectedRange = NSRange(location: range.location + (word as NSString).length,
+                                   length: 0)
+        textViewDidChange(tv)
+    }
+}
+
+/// 補全候選條：掛在鍵盤上方（inputAccessoryView），橫向捲動；無候選時高度收成 0。
+final class CompletionBarView: UIView {
+    private let scroll = UIScrollView()
+    private let stack = UIStackView()
+    var onPick: ((String) -> Void)?
+    private(set) var isShowing = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .secondarySystemBackground
+        autoresizingMask = .flexibleWidth
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scroll)
+        scroll.addSubview(stack)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor,
+                                            constant: 10),
+            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor,
+                                             constant: -10),
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+            stack.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: isShowing ? 42 : 0)
+    }
+
+    func update(candidates: [String]) {
+        let show = !candidates.isEmpty
+        if show != isShowing {
+            isShowing = show
+            invalidateIntrinsicContentSize()
+        }
+        for v in stack.arrangedSubviews {
+            stack.removeArrangedSubview(v)
+            v.removeFromSuperview()
+        }
+        for word in candidates {
+            let b = UIButton(type: .system)
+            b.setTitle(word, for: .normal)
+            b.titleLabel?.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
+            b.contentEdgeInsets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+            b.backgroundColor = .systemBackground
+            b.layer.cornerRadius = 7
+            b.addAction(UIAction { [weak self] _ in self?.onPick?(word) },
+                        for: .touchUpInside)
+            stack.addArrangedSubview(b)
+        }
+        scroll.setContentOffset(.zero, animated: false)
+    }
+}
+
+/// 補全詞表與標識符抽取（編輯器與 FileEditorView 共用同一套抽詞邏輯）
+enum CompletionVocab {
+    /// 抽出文字裡長度 ≥3 的標識符
+    static func identifiers(in text: String) -> Set<String> {
+        var out = Set<String>()
+        var cur = ""
+        func flush() {
+            if cur.count >= 3 { out.insert(cur) }
+            cur = ""
+        }
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if (v >= 65 && v <= 90) || (v >= 97 && v <= 122)
+                || (v >= 48 && v <= 57) || v == 95 {
+                cur.unicodeScalars.append(scalar)
+            } else {
+                flush()
+            }
+        }
+        flush()
+        return out
+    }
+
+    static func words(for language: String) -> Set<String> {
+        language == "swift" ? swiftWords : cFamilyWords
+    }
+
+    /// C／C++／ObjC 共用：關鍵字＋常用型別＋常用 API
+    static let cFamilyWords: Set<String> = [
+        // 關鍵字
+        "int", "char", "void", "float", "double", "long", "short", "bool",
+        "signed", "unsigned", "struct", "union", "enum", "typedef", "static",
+        "const", "extern", "return", "if", "else", "for", "while", "do",
+        "switch", "case", "default", "break", "continue", "sizeof", "goto",
+        "class", "public", "private", "protected", "virtual", "override",
+        "template", "typename", "namespace", "using", "new", "delete", "this",
+        "nullptr", "true", "false", "auto", "constexpr", "noexcept", "friend",
+        "inline", "mutable", "explicit", "operator", "throw", "try", "catch",
+        "interface", "implementation", "property", "end", "autoreleasepool",
+        "synthesize", "dynamic", "protocol", "selector", "nonatomic", "atomic",
+        "strong", "weak", "assign", "copy", "readonly", "readwrite", "retain",
+        "nil", "YES", "NO", "self", "super", "import", "include", "define",
+        // 型別
+        "NSString", "NSMutableString", "NSArray", "NSMutableArray",
+        "NSDictionary", "NSMutableDictionary", "NSSet", "NSNumber", "NSData",
+        "NSDate", "NSURL", "NSError", "NSObject", "NSValue", "NSIndexPath",
+        "UIView", "UIViewController", "UIWindow", "UILabel", "UIButton",
+        "UIColor", "UIFont", "UIScreen", "UIApplication", "UIResponder",
+        "UIImage", "UIImageView", "UITableView", "UICollectionView",
+        "UITextField", "UIScrollView", "UIStackView", "UIAlertController",
+        "BOOL", "NSInteger", "NSUInteger", "CGFloat", "CGRect", "CGPoint",
+        "CGSize", "SEL", "size_t", "uint8_t", "uint32_t", "int32_t", "int64_t",
+        "string", "vector", "map", "pair", "shared_ptr", "unique_ptr",
+        // 常用 API／方法名
+        "NSLog", "NSStringFromClass", "NSClassFromString", "UIApplicationMain",
+        "alloc", "init", "initWithFrame", "addSubview", "removeFromSuperview",
+        "viewDidLoad", "viewWillAppear", "viewDidAppear", "layoutSubviews",
+        "backgroundColor", "textColor", "textAlignment", "font", "text",
+        "frame", "bounds", "center", "hidden", "alpha", "userInteractionEnabled",
+        "addTarget", "setTitle", "setImage", "addGestureRecognizer",
+        "present", "dismiss", "pushViewController", "popViewController",
+        "stringWithFormat", "stringWithUTF8String", "UTF8String", "c_str",
+        "length", "count", "size", "push_back", "append", "begin", "end",
+        "makeKeyAndVisible", "rootViewController", "mainScreen", "whiteColor",
+        "blackColor", "clearColor", "systemFontOfSize", "boldSystemFontOfSize",
+        "dispatch_async", "dispatch_once", "main", "argc", "argv",
+    ]
+
+    /// Swift 關鍵字＋常用型別
+    static let swiftWords: Set<String> = [
+        "import", "func", "var", "let", "class", "struct", "enum", "protocol",
+        "extension", "guard", "return", "if", "else", "for", "while", "switch",
+        "case", "default", "break", "continue", "inout", "static", "private",
+        "public", "internal", "fileprivate", "override", "init", "deinit",
+        "self", "super", "nil", "true", "false", "some", "any", "throws",
+        "throw", "try", "catch", "do", "defer", "in", "where", "typealias",
+        "associatedtype", "lazy", "weak", "unowned", "mutating", "nonmutating",
+        "View", "body", "Text", "VStack", "HStack", "ZStack", "Spacer",
+        "Button", "Image", "List", "Form", "Section", "NavigationView",
+        "NavigationLink", "State", "Binding", "ObservedObject", "StateObject",
+        "EnvironmentObject", "Published", "Environment", "AppStorage",
+        "String", "Int", "Double", "Float", "Bool", "Array", "Dictionary",
+        "Set", "Optional", "Date", "URL", "Data", "UUID", "Foundation",
+        "SwiftUI", "UIKit", "print", "fatalError",
+    ]
 }
