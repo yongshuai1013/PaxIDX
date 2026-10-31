@@ -94,9 +94,9 @@ static PyObject *view_create(PyObject *self, PyObject *args) {
 }
 // Python 側 position 存儲：節點常在 add_child 之前就設 position，
 // 入樹時要按父節點原點（父 anchor 在其 bounds 的落點）補偏移再套用
-static NSMutableDictionary<id, NSValue *> *gPos = nil;
+static NSMutableDictionary<NSValue *, NSValue *> *gPos = nil;
 static void applyStoredPosition(UIView *v) {
-    NSValue *pv = gPos[v];
+    NSValue *pv = gPos[[NSValue valueWithPointer:(__bridge const void *)v]];
     if (pv == nil || v.superview == nil) return;
     CGPoint p = [pv CGPointValue];
     UIView *sv = v.superview;
@@ -111,7 +111,7 @@ static PyObject *view_set_position(PyObject *self, PyObject *args) {
     onMainSync(^{
         if (!v) return;
         if (gPos == nil) gPos = [NSMutableDictionary dictionary];
-        gPos[v] = [NSValue valueWithCGPoint:CGPointMake(x, y)];
+        gPos[[NSValue valueWithPointer:(__bridge const void *)v]] = [NSValue valueWithCGPoint:CGPointMake(x, y)];
         applyStoredPosition(v);
     });
     Py_RETURN_NONE;
