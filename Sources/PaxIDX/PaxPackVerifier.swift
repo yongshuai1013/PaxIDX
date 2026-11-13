@@ -731,7 +731,7 @@ private struct PaxPackZipReader {
 
     /// 把單一條目的未壓縮內容串流給 sink；回傳實際產出 byte 數。
     func streamEntry(_ e: PaxPackZipEntry,
-                     sink: (Data) -> Void) throws -> Int {
+                     sink: @escaping (Data) -> Void) throws -> Int {
         let lh = try readExact(e.localHeaderOffset, 30)
         guard paxU32LE(lh, 0) == 0x04034B50 else {
             throw PaxPackError(.format, "bad local header for \(e.name)")
