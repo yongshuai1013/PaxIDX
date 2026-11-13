@@ -532,7 +532,13 @@ def cmd_pack(args):
                 print(f'note: {rel}: not signable, packed as plain file')
                 continue
             if macho_state(p.read_bytes()) != 'macho':
-                fail(f'{rel}: still not qualified after ad hoc sign')
+                # 簽名工具回成功但產物仍不合 §6.1（如 codesign 對
+                # stub 只做半套）：同拒簽處理，降為一般檔。分類由
+                # 位元組決定、驗證端同法判定，兩邊必然一致。
+                demoted.add(rel)
+                print(f'note: {rel}: still unqualified after ad hoc '
+                      f'sign, packed as plain file')
+                continue
             macho_digest(p.read_bytes())
 
         manifest = {
