@@ -198,7 +198,7 @@ final class MemoryPaxPackFloorStore: PaxPackFloorStore {
 
 enum PaxPackCrypto {
     static func rawToDER(_ raw: Data) -> Data {
-        func encodeInteger(_ bytes: ArraySlice<UInt8>) -> Data {
+        func encodeInteger(_ bytes: Data) -> Data {
             var b = [UInt8](bytes)
             while b.count > 1 && b[0] == 0 { b.removeFirst() }
             if b.isEmpty { b = [0] }
@@ -576,7 +576,8 @@ enum PaxPackMachO {
 // MARK: - ZIP 讀取（中央目錄自解析 + raw deflate 解壓，不經外部解包器）
 
 private final class PaxPackInflater {
-    private var stream = compression_stream()
+    private var stream = compression_stream(
+        dst_ptr: nil, dst_size: 0, src_ptr: nil, src_size: 0, state: nil)
     private let dst: UnsafeMutablePointer<UInt8>
     private let dstCap = 1 << 18
     private(set) var ended = false
@@ -597,7 +598,9 @@ private final class PaxPackInflater {
     }
 
     func push(_ chunk: Data, isFinal: Bool, sink: (Data) -> Void) throws {
-        let flags: Int32 = isFinal ? COMPRESSION_STREAM_FINALIZE : 0
+        let flags: compression_stream_flags = isFinal
+            ? COMPRESSION_STREAM_FINALIZE
+            : compression_stream_flags(rawValue: 0)
         if chunk.isEmpty {
             stream.src_ptr = UnsafePointer(dst)
             stream.src_size = 0
@@ -608,11 +611,15 @@ private final class PaxPackInflater {
             stream.src_ptr = raw.baseAddress!
                 .assumingMemoryBound(to: UInt8.self)
             stream.src_size = raw.count
-            try pump(flags: flags, sink: sink)
+            try pump(flags: isFinal
+                        ? COMPRESSION_STREAM_FINALIZE
+                        : compression_stream_flags(rawValue: 0),
+                     sink: sink)
         }
     }
 
-    private func pump(flags: Int32, sink: (Data) -> Void) throws {
+    private func pump(flags: compression_stream_flags,
+                      sink: (Data) -> Void) throws {
         while true {
             stream.dst_ptr = dst
             stream.dst_size = dstCap
