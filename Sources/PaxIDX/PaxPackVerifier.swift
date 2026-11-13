@@ -576,14 +576,18 @@ enum PaxPackMachO {
 // MARK: - ZIP 讀取（中央目錄自解析 + raw deflate 解壓，不經外部解包器）
 
 private final class PaxPackInflater {
-    private var stream = compression_stream(
-        dst_ptr: nil, dst_size: 0, src_ptr: nil, src_size: 0, state: nil)
+    private var stream: compression_stream
     private let dst: UnsafeMutablePointer<UInt8>
     private let dstCap = 1 << 18
     private(set) var ended = false
 
     init() throws {
         dst = UnsafeMutablePointer<UInt8>.allocate(capacity: dstCap)
+        // compression_stream 無零值初始化子：以 dst 緩衝充當初始
+        // 指標（init 後、每次 process 前都會重設 src/dst 欄位）
+        stream = compression_stream(
+            dst_ptr: dst, dst_size: 0,
+            src_ptr: UnsafePointer(dst), src_size: 0, state: nil)
         let st = compression_stream_init(&stream,
                                          COMPRESSION_STREAM_DECODE,
                                          COMPRESSION_ZLIB)
@@ -598,9 +602,7 @@ private final class PaxPackInflater {
     }
 
     func push(_ chunk: Data, isFinal: Bool, sink: (Data) -> Void) throws {
-        let flags: compression_stream_flags = isFinal
-            ? COMPRESSION_STREAM_FINALIZE
-            : compression_stream_flags(rawValue: 0)
+        let flags: Int32 = isFinal ? COMPRESSION_STREAM_FINALIZE.rawValue : 0
         if chunk.isEmpty {
             stream.src_ptr = UnsafePointer(dst)
             stream.src_size = 0
@@ -611,15 +613,11 @@ private final class PaxPackInflater {
             stream.src_ptr = raw.baseAddress!
                 .assumingMemoryBound(to: UInt8.self)
             stream.src_size = raw.count
-            try pump(flags: isFinal
-                        ? COMPRESSION_STREAM_FINALIZE
-                        : compression_stream_flags(rawValue: 0),
-                     sink: sink)
+            try pump(flags: flags, sink: sink)
         }
     }
 
-    private func pump(flags: compression_stream_flags,
-                      sink: (Data) -> Void) throws {
+    private func pump(flags: Int32, sink: (Data) -> Void) throws {
         while true {
             stream.dst_ptr = dst
             stream.dst_size = dstCap
