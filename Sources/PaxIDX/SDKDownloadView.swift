@@ -10,11 +10,13 @@ struct SDKDownloadView: View {
         let url: String
     }
 
+    // SDK 一律走 PaxPack 簽名包（.pxpk）：下載後先驗簽＋逐檔雜湊＋
+    // 防回滾，全數通過才安裝；驗證失敗以 §8 錯誤碼呈現（見狀態列）。
     private let releases = [
         ReleaseInfo(major: 27, label: "iOS 27.1 SDK",
-                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios27/PaxSDK.zip"),
+                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios27/PaxSDK.pxpk"),
         ReleaseInfo(major: 26, label: "iOS 26.5 SDK",
-                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios26/PaxSDK.zip"),
+                    url: "https://github.com/yongshuai1013/PaxIDX/releases/download/paxsdk-ios26/PaxSDK.pxpk"),
     ]
 
     @State private var installed: [PaxSDKStore.InstalledSDK] = []
@@ -167,10 +169,10 @@ struct SDKDownloadView: View {
                     busyMajor = nil
                     return
                 }
-                statusText = "解壓安裝中…"
+                statusText = "驗證簽名並安裝中…"
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
-                        let sdk = try PaxSDKStore.install(zipAt: file)
+                        let sdk = try PaxSDKStore.install(paxpackAt: file)
                         DispatchQueue.main.async {
                             statusText = "已安裝 iOS \(sdk.version) SDK"
                             busyMajor = nil
@@ -213,7 +215,7 @@ final class SDKZipDownloader: NSObject, ObservableObject, URLSessionDownloadDele
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
         let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PaxSDK-\(UUID().uuidString).zip")
+            .appendingPathComponent("PaxSDK-\(UUID().uuidString).pxpk")
         do {
             try FileManager.default.copyItem(at: location, to: dest)
             onDone?(dest, nil)

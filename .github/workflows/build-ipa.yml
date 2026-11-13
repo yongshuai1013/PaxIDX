@@ -21,6 +21,8 @@ on:
       - 'project.yml'
       - 'Support/**'
       - 'project.yml'
+      - 'Tools/**'
+      - 'Tests/**'
       - '.github/workflows/build-ipa.yml'
 
 permissions:
@@ -32,6 +34,13 @@ jobs:
     steps:
       - name: 檢出代碼
         uses: actions/checkout@v4
+
+      - name: PaxPack 向量測試（驗證器對規格 §12 對版，不過不打包）
+        run: |
+          swiftc -O -o /tmp/paxpack-tests \
+            Sources/PaxIDX/PaxPackVerifier.swift \
+            Tests/PaxPackTests/main.swift
+          /tmp/paxpack-tests selftest Tests/PaxPackFixtures
 
       - name: 安裝 XcodeGen
         run: brew install xcodegen
@@ -72,6 +81,7 @@ jobs:
       - name: 編譯並打包（不簽名）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAXPACK_SIGNING_KEY: ${{ secrets.PAXPACK_SIGNING_KEY }}
         run: |
           xcodebuild archive \
             -scheme PaxIDX \
@@ -130,6 +140,46 @@ jobs:
             gh release view "$RELTAG" --repo yongshuai1013/PaxIDX >/dev/null 2>&1 || gh release create "$RELTAG" --repo yongshuai1013/PaxIDX --title "PaxSDK ($RELTAG)" --notes "PaxIDX 編譯用 SDK，打包 workflow 自動更新；App 設定頁「下載 SDK」取用。"
             gh release upload "$RELTAG" "$APPZIP" --repo yongshuai1013/PaxIDX --clobber
             ls -la build/ipa/Payload/PaxIDX.app/PaxSDK.zip
+            echo "同版 PaxSDK 再打 PaxPack 簽名包（App「下載 SDK」只吃 .pxpk）"
+            SDKVER=$(python3 -c "import json; print(json.load(open('/tmp/paxsdk/iPhoneOS.sdk/SDKSettings.json'))['Version'])")
+            case "$RELTAG" in
+              paxsdk-ios27) PXID="com.paxidx.sdk.ios27" ;;
+              *) PXID="com.paxidx.sdk.ios26" ;;
+            esac
+            EPOCH=1
+            rm -rf /tmp/oldpx
+            if gh release download "$RELTAG" --repo yongshuai1013/PaxIDX --pattern "PaxSDK.pxpk" --dir /tmp/oldpx 2>/dev/null; then
+              OLD=$(python3 Tools/paxpack.py info /tmp/oldpx/PaxSDK.pxpk | awk '/PXSecurityEpoch/{print $2}')
+              if [ -n "$OLD" ]; then EPOCH=$((OLD + 1)); fi
+            fi
+            printf '%s' "$PAXPACK_SIGNING_KEY" > /tmp/paxpack-signing.key.pem
+            chmod 600 /tmp/paxpack-signing.key.pem
+            python3 Tools/paxpack.py pack --src /tmp/paxsdk --key /tmp/paxpack-signing.key.pem --out "$PWD/build/PaxSDK.pxpk" --id "$PXID" --name "PaxSDK $SDKVER" --version "$SDKVER" --epoch "$EPOCH" --min-app 0.1.0 --kind sdk --top paxsdk
+            rm -f /tmp/paxpack-signing.key.pem
+            gh release upload "$RELTAG" "$PWD/build/PaxSDK.pxpk" --repo yongshuai1013/PaxIDX --clobber
+            ls -la build/PaxSDK.pxpk
+            echo "darwin-sdk-1（SDKManager 舊路）同步發 PaxPack 版"
+            (
+              set -e
+              rm -rf /tmp/darwinpx && mkdir -p /tmp/darwinpx/tree
+              gh release download darwin-sdk-1 --repo yongshuai1013/PaxIDX --pattern "paxidx-darwin-sdk.zip" --dir /tmp/darwinpx
+              cd /tmp/darwinpx
+              unzip -o -q paxidx-darwin-sdk.zip -d zipx
+              SDKDIR=$(find zipx -maxdepth 2 -name 'iPhoneOS*.sdk' -type d | head -1)
+              echo "darwin SDK 來源目錄：$SDKDIR"
+              cp -R "$SDKDIR" tree/iPhoneOS.sdk
+              SDKVERD=$(python3 -c "import json; print(json.load(open('tree/iPhoneOS.sdk/SDKSettings.json'))['Version'])")
+              EPOCHD=1
+              if gh release download darwin-sdk-1 --repo yongshuai1013/PaxIDX --pattern "paxidx-darwin-sdk.pxpk" --dir /tmp/darwinpx/old 2>/dev/null; then
+                OLD=$(python3 "$GITHUB_WORKSPACE/Tools/paxpack.py" info /tmp/darwinpx/old/paxidx-darwin-sdk.pxpk | awk '/PXSecurityEpoch/{print $2}')
+                if [ -n "$OLD" ]; then EPOCHD=$((OLD + 1)); fi
+              fi
+              printf '%s' "$PAXPACK_SIGNING_KEY" > /tmp/darwinpx/key.pem
+              chmod 600 /tmp/darwinpx/key.pem
+              python3 "$GITHUB_WORKSPACE/Tools/paxpack.py" pack --src tree --key /tmp/darwinpx/key.pem --out /tmp/darwinpx/paxidx-darwin-sdk.pxpk --id com.paxidx.sdk.darwin --name "Darwin SDK" --version "$SDKVERD" --epoch "$EPOCHD" --min-app 0.1.0 --kind sdk --top darwinsdk
+              rm -f /tmp/darwinpx/key.pem
+              gh release upload darwin-sdk-1 /tmp/darwinpx/paxidx-darwin-sdk.pxpk --repo yongshuai1013/PaxIDX --clobber
+            )
           brew install ldid 2>/dev/null || true
           ldid -Sci-entitlements.plist build/ipa/Payload/PaxIDX.app/PaxIDX
           echo "main executable entitlements after ldid:"

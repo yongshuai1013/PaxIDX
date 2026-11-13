@@ -86,6 +86,61 @@ enum PaxSDKStore {
         try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmp) }
         try Zip.unzipFile(zipURL, destination: tmp, overwrite: true, password: nil)
+        return try installExtracted(from: tmp)
+    }
+
+    /// 安裝一份 PaxPack 簽名包（.pxpk）：先以 App 內嵌發行公鑰完整
+    /// 驗證（格式規格 §8：封存簽名→清單簽名→逐檔雜湊→防回滾），
+    /// 通過才把暫存區換入；換入後寫防回滾下限（Keychain），寫入
+    /// 失敗視為安裝失敗並回滾本次換入（§8 第 8 步）。
+    /// res 的「缺位才補」屬追加性質，不在回滾範圍內。
+    @discardableResult
+    static func install(paxpackAt packageURL: URL) throws -> InstalledSDK {
+        let fm = FileManager.default
+        let verifier = PaxPackVerifier()
+        let verified = try verifier.verifyAndStage(
+            packageAt: packageURL, expectedKind: "sdk")
+        defer { try? fm.removeItem(at: verified.stagingURL) }
+        // 同主版舊 SDK 先備份，floor 提交失敗時還原
+        let stagedSDK = verified.stagingURL
+            .appendingPathComponent("iPhoneOS.sdk", isDirectory: true)
+        var backup: URL? = nil
+        var destFolder: String? = nil
+        if let ver = sdkVersion(at: stagedSDK) {
+            let folder = folderName(forVersion: ver)
+            destFolder = folder
+            let dest = sdkStoreDir.appendingPathComponent(
+                folder, isDirectory: true)
+            if fm.fileExists(atPath: dest.path) {
+                let bak = fm.temporaryDirectory.appendingPathComponent(
+                    "PaxSDKBackup-\(UUID().uuidString)", isDirectory: true)
+                try fm.moveItem(at: dest, to: bak)
+                backup = bak
+            }
+        }
+        do {
+            let installed = try installExtracted(
+                from: verified.stagingURL)
+            try verifier.commitFloor(for: verified.manifest)
+            if let bak = backup { try? fm.removeItem(at: bak) }
+            return installed
+        } catch {
+            if let folder = destFolder {
+                let dest = sdkStoreDir.appendingPathComponent(
+                    folder, isDirectory: true)
+                try? fm.removeItem(at: dest)
+                if let bak = backup {
+                    try? fm.moveItem(at: bak, to: dest)
+                }
+            }
+            throw error
+        }
+    }
+
+    /// 已解開的 SDK 樹（zip 解壓結果或 PaxPack 驗證暫存區）落地安裝。
+    private static func installExtracted(from tmp: URL) throws
+        -> InstalledSDK {
+        let fm = FileManager.default
         let srcSDK = tmp.appendingPathComponent("iPhoneOS.sdk", isDirectory: true)
         guard fm.fileExists(atPath: srcSDK.path), let ver = sdkVersion(at: srcSDK) else {
             throw NSError(domain: "PaxSDKStore", code: 1,

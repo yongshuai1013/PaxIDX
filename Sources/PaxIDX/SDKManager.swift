@@ -1,8 +1,10 @@
 import Foundation
 import Zip
 
-/// Darwin SDK 管理：下載、解壓、定位
-/// SDK 從 PaxIDX 的 darwin-sdk release 下載（zip 格式，約 35MB，iOS 18.5 SDK），解壓到 App 容器
+/// Darwin SDK 管理：下載、驗證、定位
+/// SDK 從 PaxIDX 的 darwin-sdk release 下載 PaxPack 簽名包（.pxpk，
+/// iOS 18.5 SDK）：驗簽＋逐檔雜湊＋防回滾全數通過才換入（規格 §8），
+/// 驗證失敗不動既有 SDK、錯誤原樣回報（含 §8 錯誤碼）
 final class SDKManager {
     static let shared = SDKManager()
 
@@ -20,7 +22,8 @@ final class SDKManager {
         return docs.appendingPathComponent("SDK", isDirectory: true)
     }
 
-    /// 從 PaxIDX release 下載 iPhoneOS SDK（zip，約 35MB，iOS 18.5）
+    /// 從 PaxIDX release 下載 iPhoneOS SDK 的 PaxPack 簽名包（iOS 18.5）
+    /// 順序：下載 → 完整驗證 → 換入；驗證失敗既有 SDK 原封不動。
     /// - Parameters:
     ///   - onProgress: 進度回調 (0.0~1.0)
     ///   - completion: 完成回調 (成功/失敗訊息)
@@ -28,36 +31,25 @@ final class SDKManager {
         onProgress: @escaping (Double) -> Void,
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
-        // 回退：iOS 15.6 SDK（C 可用；Swift 模塊後續單獨疊加）
-        let downloadURLString = "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.zip"
+        let downloadURLString = "https://github.com/yongshuai1013/PaxIDX/releases/download/darwin-sdk-1/paxidx-darwin-sdk.pxpk"
         guard let downloadURL = URL(string: downloadURLString) else {
             completion(.failure(NSError(domain: "SDKManager", code: -2,
                 userInfo: [NSLocalizedDescriptionKey: "SDK 下載地址無效"])))
             return
         }
 
-        // 先清掉舊的髒數據（18.5/15.6 混裝會導致 lld 報平台不支援）
-        let fm = FileManager.default
-        if let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first {
-            let sdkDir = docs.appendingPathComponent("SDK", isDirectory: true)
-            if fm.fileExists(atPath: sdkDir.path) {
-                try? fm.removeItem(at: sdkDir)
-            }
-        }
-
         // 下載（只下底包；Swift 6 模塊改手動疊加，避免自動疊加失敗拖累整個 SDK）
         self.downloadFile(from: downloadURL, onProgress: onProgress) { result in
             switch result {
             case .success(let fileURL):
-                // 解壓
                 do {
-                    try self.extract(zip: fileURL)
+                    try self.installVerifiedPackage(at: fileURL)
                     try? FileManager.default.removeItem(at: fileURL)
                     if let sdk = self.sdkPath {
                         completion(.success(sdk))
                     } else {
                         throw NSError(domain: "SDKManager", code: -3,
-                            userInfo: [NSLocalizedDescriptionKey: "解壓後找不到 SDK"])
+                            userInfo: [NSLocalizedDescriptionKey: "安裝後找不到 SDK"])
                     }
                 } catch {
                     completion(.failure(error))
@@ -66,6 +58,45 @@ final class SDKManager {
                 completion(.failure(error))
             }
         }
+    }
+
+    /// PaxPack 驗證安裝：驗證器（§8）全數通過才把暫存區的 SDK 換入
+    /// 容器；換入後寫防回滾下限，下限寫入失敗回滾到舊 SDK 並拋錯。
+    private func installVerifiedPackage(at packageURL: URL) throws {
+        let fm = FileManager.default
+        let verifier = PaxPackVerifier()
+        let verified = try verifier.verifyAndStage(
+            packageAt: packageURL, expectedKind: "sdk")
+        defer { try? fm.removeItem(at: verified.stagingURL) }
+        var src = verified.stagingURL.appendingPathComponent(
+            "iPhoneOS.sdk", isDirectory: true)
+        if !fm.fileExists(atPath: src.path) {
+            let legacy = verified.stagingURL.appendingPathComponent(
+                "iPhoneOS15.6.sdk", isDirectory: true)
+            if fm.fileExists(atPath: legacy.path) { src = legacy }
+        }
+        guard fm.fileExists(atPath: src.path) else {
+            throw NSError(domain: "SDKManager", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "包內找不到 iPhoneOS.sdk"])
+        }
+        try fm.createDirectory(at: containerURL,
+                               withIntermediateDirectories: true)
+        let target = containerURL.appendingPathComponent(
+            "iPhoneOS.sdk", isDirectory: true)
+        let backup = containerURL.appendingPathComponent(
+            "iPhoneOS.sdk.paxbak", isDirectory: true)
+        try? fm.removeItem(at: backup)
+        let hadOld = fm.fileExists(atPath: target.path)
+        if hadOld { try fm.moveItem(at: target, to: backup) }
+        do {
+            try fm.moveItem(at: src, to: target)
+            try verifier.commitFloor(for: verified.manifest)
+        } catch {
+            try? fm.removeItem(at: target)
+            if hadOld { try? fm.moveItem(at: backup, to: target) }
+            throw error
+        }
+        try? fm.removeItem(at: backup)
     }
 
     private func downloadFile(
@@ -80,7 +111,7 @@ final class SDKManager {
                 case .success(let tempURL):
                     // 移到臨時位置
                     let dest = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("sdk.zip")
+                        .appendingPathComponent("sdk.pxpk")
                     try? FileManager.default.removeItem(at: dest)
                     do {
                         try FileManager.default.moveItem(at: tempURL, to: dest)

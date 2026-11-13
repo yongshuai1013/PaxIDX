@@ -16,7 +16,7 @@ settings:
     PAXIDX_BUNDLE_ID: com.yongshuai.paxidx
     PAXIDX_DISPLAY_NAME: PaxIDX
     PAXIDX_MARKETING_VERSION: "0.1.0"
-    PAXIDX_BUILD_NUMBER: "1"
+    PAXIDX_BUILD_NUMBER: "2"
 
 packages:
   Zip:

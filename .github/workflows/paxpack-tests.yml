@@ -1,0 +1,83 @@
+# PaxPack 向量測試：App 端驗證器（Swift）與打包端（Python）的
+# 跨語言對版。規格 §12 向量＋新鮮包端對端（Python 打包 → Swift 驗證）
+# ＋ Mach-O 雜湊雙邊逐字比對。任一格不過即紅。
+name: PaxPack Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Sources/PaxIDX/PaxPackVerifier.swift'
+      - 'Tests/**'
+      - 'Tools/**'
+      - '.github/workflows/paxpack-tests.yml'
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - name: 檢出代碼
+        uses: actions/checkout@v4
+
+      - name: 編譯向量測試驅動
+        run: |
+          swiftc -O -o /tmp/paxpack-tests \
+            Sources/PaxIDX/PaxPackVerifier.swift \
+            Tests/PaxPackTests/main.swift
+
+      - name: §12 向量自測（試驗包／正式鑰樣本／六格不變性／防回滾）
+        run: /tmp/paxpack-tests selftest Tests/PaxPackFixtures
+
+      - name: 新鮮包跨語言端對端
+        run: |
+          set -euo pipefail
+          WORK=$(mktemp -d)
+          echo 'int pax_fresh(void){return 7;}' > "$WORK/t.c"
+          IOSSDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          MACSDK=$(xcrun --sdk macosx --show-sdk-path)
+          clang -target arm64-apple-ios15.0 -dynamiclib -isysroot "$IOSSDK" \
+            "$WORK/t.c" -o "$WORK/libfresh-unsigned.dylib"
+          cp "$WORK/libfresh-unsigned.dylib" "$WORK/libfresh.dylib"
+          codesign -s - --force "$WORK/libfresh.dylib"
+          clang -target x86_64-apple-macosx10.15 -dynamiclib \
+            -isysroot "$MACSDK" "$WORK/t.c" -o "$WORK/libfresh-x64.dylib"
+          codesign -s - --force "$WORK/libfresh-x64.dylib"
+          lipo -create "$WORK/libfresh.dylib" "$WORK/libfresh-x64.dylib" \
+            -output "$WORK/libfat.dylib"
+          mkdir -p "$WORK/src/lib" "$WORK/src/share" "$WORK/src/emptydir"
+          cp "$WORK/libfresh.dylib" "$WORK/src/lib/libfresh.dylib"
+          cp "$WORK/libfat.dylib" "$WORK/src/lib/libfat.dylib"
+          echo 'fresh payload note' > "$WORK/src/share/note.txt"
+          ln -s ../lib/libfresh.dylib "$WORK/src/share/fresh-link"
+          python3 Tools/paxpack.py genkey --name fresh --dir "$WORK/keys"
+          PUBHEX=$(python3 -c "import sys; sys.path.insert(0, 'Tools'); import paxpack; print(paxpack.raw_public_key('$WORK/keys/fresh.pub.pem').hex())")
+          python3 Tools/paxpack.py pack --src "$WORK/src" \
+            --key "$WORK/keys/fresh.key.pem" --out "$WORK/fresh.pxpk" \
+            --id com.paxidx.fresh-test --name Fresh --version 0.1 \
+            --epoch 2 --min-app 0.1.0 --kind toolchain --top fresh
+          echo '--- Mach-O 雜湊雙邊比對'
+          PYHASH=$(python3 -c "import sys; sys.path.insert(0, 'Tools'); import paxpack; print(paxpack.macho_digest(open('$WORK/src/lib/libfresh.dylib','rb').read()).hex())")
+          SWHASH=$(/tmp/paxpack-tests macho-hash "$WORK/src/lib/libfresh.dylib")
+          echo "python=$PYHASH swift=$SWHASH"
+          [ "$PYHASH" = "$SWHASH" ]
+          PYFAT=$(python3 -c "import sys; sys.path.insert(0, 'Tools'); import paxpack; print(paxpack.macho_digest(open('$WORK/src/lib/libfat.dylib','rb').read()).hex())")
+          SWFAT=$(/tmp/paxpack-tests macho-hash "$WORK/src/lib/libfat.dylib")
+          echo "fat python=$PYFAT swift=$SWFAT"
+          [ "$PYFAT" = "$SWFAT" ]
+          echo '--- 未簽名 Mach-O 必須被 Swift 端拒（ERR_MACHO）'
+          if /tmp/paxpack-tests macho-hash "$WORK/libfresh-unsigned.dylib" > "$WORK/unsigned.out" 2>&1; then
+            echo 'unsigned Mach-O was hashed, must not happen'; exit 1
+          fi
+          grep -qx 'ERR_MACHO' "$WORK/unsigned.out"
+          echo '--- Swift 驗 Python 新鮮包（正測＋防回滾＋篡改）'
+          /tmp/paxpack-tests verify "$WORK/fresh.pxpk" "$PUBHEX" 0 toolchain 0.1.0
+          OUT=$(/tmp/paxpack-tests verify "$WORK/fresh.pxpk" "$PUBHEX" 3 toolchain 0.1.0 || true)
+          [ "$OUT" = 'ERR_ROLLBACK' ]
+          python3 -c "
+          d = bytearray(open('$WORK/fresh.pxpk','rb').read())
+          d[len(d)//3] ^= 0x01
+          open('$WORK/fresh-tampered.pxpk','wb').write(bytes(d))"
+          OUT=$(/tmp/paxpack-tests verify "$WORK/fresh-tampered.pxpk" "$PUBHEX" 0 toolchain 0.1.0 || true)
+          [ "$OUT" = 'ERR_ARCHIVE_SIGNATURE' ]
+          echo 'cross-language e2e: ALL OK'
