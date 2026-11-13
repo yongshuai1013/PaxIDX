@@ -602,7 +602,8 @@ private final class PaxPackInflater {
     }
 
     func push(_ chunk: Data, isFinal: Bool, sink: (Data) -> Void) throws {
-        let flags: Int32 = isFinal ? COMPRESSION_STREAM_FINALIZE.rawValue : 0
+        let flags: Int32 = isFinal
+            ? Int32(bitPattern: COMPRESSION_STREAM_FINALIZE.rawValue) : 0
         if chunk.isEmpty {
             stream.src_ptr = UnsafePointer(dst)
             stream.src_size = 0
